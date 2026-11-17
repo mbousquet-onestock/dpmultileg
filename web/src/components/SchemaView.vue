@@ -52,6 +52,7 @@ function criterionFormat(field: string, v: number): string {
 /* ------------------------------------------------------------------ OneStock detailed computation (debug) */
 
 const debugOpen = ref(false);
+const configOpen = ref(false);
 const debugState = ref<'idle' | 'loading' | 'error'>('idle');
 const debugResult = ref<unknown>(null);
 const debugError = ref('');
@@ -118,8 +119,8 @@ interface Row {
   schema: LogisticSchema;
   number: number;
   chosen: boolean;
-  /** Best schema according to the configured priorities, among the ones holding the stock. */
-  expected: boolean;
+  /** Schema returned by the OneStock delivery promise (may differ from the one selected by the priorities). */
+  returned: boolean;
   /** Legs returned by OneStock for this schema (multi-leg chains may be partially returned). */
   returnedLegs: number;
   availability: OriginAvailability[] | null;
@@ -135,7 +136,7 @@ const rows = computed<Row[]>(() => {
     schema,
     number: i + 1,
     chosen: matches.includes(i),
-    expected: false,
+    returned: false,
     returnedLegs: d.shipments.filter((_, k) => matches[k] === i).reduce((n, s) => Math.max(n, s.legs.length), 0),
     availability: stock.value ? originAvailability(schema, lines.value, stock.value, zoneCtx.value) : null,
     cost: schemaCost(schema),
@@ -143,10 +144,14 @@ const rows = computed<Row[]>(() => {
   }));
   const hasStock = (r: Row) => !r.availability || r.availability.every((a) => a.endpoints.length > 0);
   const order = sortOrder.value;
-  const expectedIdx = bestByPriorities(order, base.map((r) => r.schema), (i) => hasStock(base[i]));
-  if (expectedIdx >= 0) base[expectedIdx].expected = true;
-  const expected = base[expectedIdx];
-  const ref0 = base.find((r) => r.chosen);
+  // The selected route is the best schema according to the priorities, among the ones holding the stock.
+  const selectedIdx = bestByPriorities(order, base.map((r) => r.schema), (i) => hasStock(base[i]));
+  base.forEach((r, i) => {
+    r.returned = r.chosen; // schema returned by the OneStock promise
+    r.chosen = i === selectedIdx;
+  });
+  const selected = base[selectedIdx];
+  const first = order.sort_criterias?.[0];
   const fmt = (txt: string, d: { rank: number; field: string; chosen: number; other: number }) =>
     txt
       .replace('{rank}', String(d.rank))
@@ -156,6 +161,10 @@ const rows = computed<Row[]>(() => {
 
   for (const r of base) {
     const reasons: Reason[] = [];
+    if (r.chosen) {
+      reasons.push({ ok: true, text: t('whySelectedByPriorities').replace('{label}', first ? criterionLabel(first.field) : '') });
+      if (r.returned) reasons.push({ ok: true, text: t('whyConfirmedByOnestock') });
+    }
     // Stock at the origin
     if (r.availability) {
       for (const a of r.availability) {
@@ -167,33 +176,14 @@ const rows = computed<Row[]>(() => {
         }
       }
     }
-    if (r.chosen) {
-      reasons.unshift({ ok: true, text: t('whyChosenByPromise') });
+    if (!r.chosen && selected && hasStock(r)) {
+      const d = decisiveCriterion(order, selected.schema, r.schema);
+      reasons.push(d ? { ok: false, text: fmt(t('whyLostOnCriterion'), d) } : { ok: null, text: t('whyTieWithSelected') });
+    }
+    if (r.returned && !r.chosen) {
+      reasons.unshift({ ok: null, text: t('whyReturnedNotSelected').replace('{n}', String(selected?.number ?? '?')) });
       if (r.returnedLegs && r.returnedLegs < r.schema.legs.length)
         reasons.push({ ok: null, text: t('whyPartialLegs').replace('{n}', String(r.returnedLegs)).replace('{m}', String(r.schema.legs.length)) });
-      if (r.expected) reasons.push({ ok: true, text: t('whyMatchesPriorities') });
-      else if (expected) {
-        const d = decisiveCriterion(order, expected.schema, r.schema);
-        reasons.push({
-          ok: false,
-          text: d ? fmt(t('whyPrioritiesPointElsewhere'), d).replaceAll('{n}', String(expected.number)) : t('whyPrioritiesTie').replace('{n}', String(expected.number)),
-        });
-      }
-    } else if (r.expected && ref0) {
-      const d = decisiveCriterion(order, ref0.schema, r.schema);
-      reasons.unshift({ ok: null, text: t('whyExpectedNotChosen') });
-      if (d && !d.chosenBetter) reasons.push({ ok: null, text: fmt(t('whyExpectedBetter'), d) });
-      reasons.push({ ok: null, text: t('whyExpectedCauses') });
-    } else if (r.expected) {
-      reasons.unshift({ ok: true, text: t('whyExpectedOnly') });
-    } else if (ref0 && hasStock(r)) {
-      const d = decisiveCriterion(order, ref0.schema, r.schema);
-      if (d?.chosenBetter) reasons.push({ ok: false, text: fmt(t('whyLostOnCriterion'), d) });
-      else if (d) reasons.push({ ok: null, text: fmt(t('whyBetterButExcluded'), d) });
-      else reasons.push({ ok: null, text: t('whyNotChosenOther') });
-    } else if (expected && hasStock(r)) {
-      const d = decisiveCriterion(order, expected.schema, r.schema);
-      if (d?.chosenBetter) reasons.push({ ok: false, text: fmt(t('whyLostOnCriterion'), d) });
     }
     // Restrictions and constraints of the carriers used (possible exclusion causes, to check against the items).
     for (const leg of r.schema.legs) {
@@ -209,13 +199,15 @@ const rows = computed<Row[]>(() => {
   return [...base].sort(
     (a, b) =>
       Number(b.chosen) - Number(a.chosen) ||
-      Number(b.expected) - Number(a.expected) ||
       Number(hasStock(b)) - Number(hasStock(a)) ||
       a.schema.maxHours - b.schema.maxHours,
   );
 });
 
-const anyChosen = computed(() => rows.value.some((r) => r.chosen));
+const anyChosen = computed(() => rows.value.some((r) => r.returned));
+/** OneStock answered with another schema than the one designated by the priorities. */
+const divergence = computed(() => rows.value.find((r) => r.returned && !r.chosen));
+const selectedRow = computed(() => rows.value.find((r) => r.chosen));
 </script>
 
 <template>
@@ -281,14 +273,20 @@ const anyChosen = computed(() => rows.value.some((r) => r.chosen));
           </span>
           <span class="os-body-s os-text-secondary">{{ t('prioritiesHint') }}</span>
         </div>
+        <OsAlert
+          v-if="divergence && selectedRow"
+          type="warning"
+          :title="t('divergenceTitle')"
+          :subtitle="t('divergenceText').replaceAll('{a}', String(divergence.number)).replaceAll('{b}', String(selectedRow.number))"
+        />
         <OsAlert v-if="option.status !== 'none' && data.theoretical.length && !anyChosen" type="info" :subtitle="t('whyNoRoutesReturned')" />
         <p v-if="!data.theoretical.length" class="os-label-s os-text-secondary">{{ t('noSchema') }}</p>
 
-        <div v-for="row in rows" :key="row.number" class="theo" :class="{ used: row.chosen, expected: row.expected && !row.chosen }">
+        <div v-for="row in rows" :key="row.number" class="theo" :class="{ used: row.chosen }">
           <div class="theo-head os-body-s os-text-secondary">
             <span>#{{ row.number }} · {{ row.schema.legs.length }} {{ row.schema.legs.length > 1 ? t('legs') : t('leg') }} · {{ t('transit') }} {{ transit(row.schema) }}</span>
             <span class="badges">
-              <OsBadge v-if="row.expected" :text="t('schemaExpected')" color="blue" icon="star" />
+              <OsBadge v-if="row.returned && !row.chosen" :text="t('schemaReturned')" color="orange" icon="warning-outline" />
               <OsBadge v-if="row.chosen" :text="t('schemaSelected')" color="green" icon="check" />
             </span>
           </div>
@@ -314,6 +312,10 @@ const anyChosen = computed(() => rows.value.some((r) => r.chosen));
           <OsButton type="secondary" icon="search" :text="t('debugRun')" :pending="debugState === 'loading'" @click="loadDebug" />
         </div>
         <OsAlert v-if="debugState === 'error'" type="danger" :subtitle="debugError" />
+        <OsCollapse v-if="data.entry.config" v-model="configOpen">
+          <template #header><span class="os-body-l">{{ t('configRaw') }}</span></template>
+          <template #content><pre class="raw">{{ JSON.stringify(data.entry.config, null, 2) }}</pre></template>
+        </OsCollapse>
         <OsCollapse v-if="debugResult" v-model="debugOpen">
           <template #header><span class="os-body-l">{{ t('debugResult') }}</span></template>
           <template #content><pre class="raw">{{ JSON.stringify(debugResult, null, 2) }}</pre></template>
