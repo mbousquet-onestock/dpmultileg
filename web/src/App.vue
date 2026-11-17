@@ -117,6 +117,7 @@ onMounted(async () => {
   }
 });
 
+const appVersion = __APP_VERSION__;
 const missing = computed(() => (!state.lines.length ? t('needItems') : !destination.value ? t('needDestination') : ''));
 </script>
 
@@ -190,6 +191,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
       </div>
     </div>
     </template>
+    <footer class="version os-body-s">v {{ appVersion }}</footer>
   </div>
 </template>
 
@@ -215,4 +217,5 @@ h1 { margin: 0 0 2px; color: var(--os-text-primary); }
 .empty { padding: 24px; border: 1px dashed var(--os-border); border-radius: 5px; text-align: center; background: #fff; }
 .hint { margin: 0 0 8px; }
 .mb { margin-bottom: 12px; }
+.version { margin-top: 24px; text-align: right; color: var(--os-neutral-300); }
 </style>

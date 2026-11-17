@@ -28,6 +28,7 @@ const hint = computed(() => {
 
 const report = computed(() => ({
   step: props.step,
+  app_version: __APP_VERSION__,
   at: new Date().toISOString(),
   page: location.href.replace(/extension_signature=[^&]+/, 'extension_signature=***'),
   error: apiErr.value

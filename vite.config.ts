@@ -34,7 +34,13 @@ export default defineConfig({
           ]),
     ],
   },
-  define: { __OFFICIAL_DS__: JSON.stringify(useOfficialDs) },
+  define: {
+    __OFFICIAL_DS__: JSON.stringify(useOfficialDs),
+    /** Deployed version, shown in the footer and in the error diagnostic. */
+    __APP_VERSION__: JSON.stringify(
+      `${(process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.GIT_COMMIT ?? 'local').slice(0, 7)} · ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+    ),
+  },
   server: {
     port: 5173,
     proxy: { '/api': 'http://localhost:3001' },
