@@ -83,6 +83,20 @@ export async function loadEndpoints(query = '') {
   state.extraEndpoints = [...state.extraEndpoints.filter((e) => !found.some((f) => f.id === e.id)), ...found];
 }
 
+/** Same request as the test, for one delivery method, with OneStock debug details (sort order, restrictions...). */
+export async function runDebug(deliveryMethod: string): Promise<unknown> {
+  if (!destination.value) return null;
+  const body: Record<string, unknown> = {
+    sales_channel: state.salesChannel,
+    line_items: state.lines.map((l) => ({ item_id: l.item.id, qty: l.qty })),
+    delivery_options: [{ delivery_method: deliveryMethod, destination: destination.value }],
+    debug: true,
+  };
+  if (state.price.enabled && state.price.value !== undefined) body.price = state.price.value;
+  if (state.date.enabled && state.date.value) body.from = Math.floor(new Date(state.date.value).getTime() / 1000);
+  return (await api.deliveryPromises(body)).response;
+}
+
 export async function runTest() {
   if (!canRun.value || !destination.value) return;
   state.running = true;

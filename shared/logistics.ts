@@ -2,11 +2,13 @@ import type {
   Carrier,
   DeliveryConfig,
   DeliveryRoute,
+  DeliveryRestriction,
   Destination,
   Endpoint,
   Location,
   PromiseOption,
   PromiseRoute,
+  SortOrder,
   Zone,
 } from './types.js';
 
@@ -434,4 +436,97 @@ export function collectStockLines(payload: unknown, depth = 0): StockLine[] {
     return [{ item_id: item, endpoint_id: endpoint, quantity: Number(qty) || 0, type: typeof o.type === 'string' ? o.type : undefined }];
   }
   return Object.values(o).flatMap((v) => collectStockLines(v, depth + 1));
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Priorities (sort orders), restrictions and route constraints
+ * ---------------------------------------------------------------------------------------------- */
+
+/** Sort order of a delivery method / sales channel (exact match first, then the generic ones). */
+export function sortOrderFor(sortOrders: SortOrder[], deliveryMethod: string, salesChannel?: string): SortOrder | undefined {
+  const m = sortOrders.filter((s) => !s.delivery_method || s.delivery_method === deliveryMethod);
+  return (
+    m.find((s) => s.delivery_method === deliveryMethod && s.sales_channel === salesChannel) ??
+    m.find((s) => s.delivery_method === deliveryMethod && !s.sales_channel) ??
+    m.find((s) => !s.delivery_method && s.sales_channel === salesChannel) ??
+    m.find((s) => !s.delivery_method && !s.sales_channel)
+  );
+}
+
+export type CriterionKind = 'time' | 'metric' | 'shipments' | 'unknown';
+
+/** What a sort criterion measures, as far as it can be estimated from the configuration. */
+export function criterionKind(field: string): CriterionKind {
+  const f = field.toLowerCase();
+  if (/eta|delay|time|hour|date|fast|delivery_date|lead/.test(f)) return 'time';
+  if (/shipment|split|parcel_number|nb_parcel/.test(f)) return 'shipments';
+  if (/cost|price|carbon|co2|footprint|metric|fee|distance/.test(f)) return 'metric';
+  return 'unknown';
+}
+
+/**
+ * Estimated value of a criterion for a schema (lower is better unless desc):
+ * time -> max transit hours, metric -> sum of the matching metric_values of the legs.
+ * Undefined when the configuration does not allow an estimate.
+ */
+export function criterionValue(schema: LogisticSchema, field: string): number | undefined {
+  const kind = criterionKind(field);
+  if (kind === 'time') return schema.maxHours;
+  if (kind === 'shipments') return 1;
+  const key = field.replace(/^(metric_values|metrics)\./, '');
+  const values = schema.legs.map((l) => {
+    const mv = l.route.metric_values ?? {};
+    if (key in mv) return mv[key];
+    if (/cost/i.test(key)) return mv.cost_by_parcel ?? mv.cost;
+    if (/carbon|co2|footprint/i.test(key)) return mv.carbon_footprint ?? mv.co2;
+    return undefined;
+  });
+  if (values.every((v) => v === undefined)) return undefined;
+  return values.reduce<number>((s, v) => s + (v ?? 0), 0);
+}
+
+export interface Decision {
+  /** 1-based index of the decisive criterion */
+  rank: number;
+  field: string;
+  desc: boolean;
+  chosen: number;
+  other: number;
+  /** true: the chosen schema is better on this criterion (consistent); false: the other one looks better. */
+  chosenBetter: boolean;
+}
+
+/** First criterion of the sort order on which two schemas differ (with estimated values). */
+export function decisiveCriterion(order: SortOrder | undefined, chosen: LogisticSchema, other: LogisticSchema): Decision | undefined {
+  const criteria = order?.sort_criterias ?? [];
+  for (let i = 0; i < criteria.length; i++) {
+    const { field, desc = false } = criteria[i];
+    const a = criterionValue(chosen, field);
+    const b = criterionValue(other, field);
+    if (a === undefined || b === undefined || a === b) continue;
+    return { rank: i + 1, field, desc, chosen: a, other: b, chosenBetter: desc ? a > b : a < b };
+  }
+  return undefined;
+}
+
+/** Restrictions configured on the carrier services (or origin zones) used by a route. */
+export function restrictionsForRoute(route: DeliveryRoute, restrictions: DeliveryRestriction[]): DeliveryRestriction[] {
+  return restrictions.filter((r) => {
+    const black = r.carrier_blacklist?.some((c) => sameCarrier(c, route.carrier));
+    const white = r.carrier_whitelist?.length ? !r.carrier_whitelist.some((c) => sameCarrier(c, route.carrier)) : false;
+    const zone = !!route.origin_zone_id && !!r.origin_zone_blacklist?.includes(route.origin_zone_id);
+    return black || white || zone;
+  });
+}
+
+/** Human readable route constraints ("sumW <= 30"). */
+export function routeConstraints(route: DeliveryRoute): string[] {
+  const c = (route.constraints ?? {}) as {
+    order_constraints?: { name?: string; op?: string; value?: number }[];
+    parcel_constraints?: { formula?: string; op?: string; value?: number }[];
+  };
+  return [
+    ...(c.parcel_constraints ?? []).map((p) => `${p.formula ?? '?'} ${p.op ?? ''} ${p.value ?? ''}`.trim()),
+    ...(c.order_constraints ?? []).map((o) => `${o.name ?? '?'} ${o.op ?? ''} ${o.value ?? ''}`.trim()),
+  ];
 }

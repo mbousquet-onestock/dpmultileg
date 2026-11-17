@@ -136,3 +136,24 @@ export interface SalesChannel {
   currency?: string;
   timezone?: string;
 }
+
+/** GET /sort_orders: ordered criteria used by the delivery promise to pick the best combination. */
+export interface SortOrder {
+  id: string;
+  delivery_method?: string;
+  sales_channel?: string;
+  sort_criterias?: { field: string; desc?: boolean }[];
+}
+
+/** GET /delivery_restrictions: items / origins a carrier service can not handle. */
+export interface DeliveryRestriction {
+  id: string;
+  description?: string;
+  carrier_blacklist?: Carrier[];
+  carrier_whitelist?: Carrier[];
+  forbidden_origin_types?: string[];
+  origin_zone_blacklist?: string[];
+  origin_zone_whitelist?: string[];
+  operator?: string;
+  item_filter?: { category?: string[]; feature?: Record<string, Record<string, { op: string; value?: unknown }>> };
+}

@@ -5,7 +5,7 @@
  *   warehouse -> Marseille hub -> ferry to Corsica
  *   warehouse -> stores shuttle -> click & collect
  */
-import { buildSchemas, deliveryMethods, zoneEndpoints, type ZoneContext } from '../../shared/logistics.js';
+import { buildSchemas, criterionValue, deliveryMethods, sortOrderFor, zoneEndpoints, type ZoneContext } from '../../shared/logistics.js';
 import type {
   DeliveryConfig,
   DeliveryRoute,
@@ -142,6 +142,23 @@ export const mockConfigs: DeliveryConfig[] = [
   },
 ];
 
+export const mockSortOrders = [
+  { id: 'so_sdd', delivery_method: 'SDD', sales_channel: 'ecom_fr', sort_criterias: [{ field: 'eta_end', desc: false }, { field: 'cost', desc: false }] },
+  { id: 'so_hd', delivery_method: 'HD_standard', sales_channel: 'ecom_fr', sort_criterias: [{ field: 'cost', desc: false }, { field: 'eta_end', desc: false }] },
+];
+
+export const mockRestrictions = [
+  {
+    id: 'res_bulky_courier',
+    description: 'Articles hors gabarit interdits en coursier et navette',
+    carrier_blacklist: [
+      { name: 'stuart', option: 'same_day' },
+      { name: 'store_shuttle', option: 'navette' },
+    ],
+    item_filter: { feature: { bulky: { '': { op: '=', value: true } } } },
+  },
+];
+
 export const mockSalesChannels: SalesChannel[] = [
   { id: 'ecom_fr', name: 'E-commerce France', currency: 'EUR', timezone: 'Europe/Paris' },
   { id: 'sc_order_in_store', name: 'SC Order In Store', currency: 'EUR', timezone: 'Europe/Paris' },
@@ -225,7 +242,17 @@ function deliveryPromises(body: Record<string, unknown>): { delivery_options: Pr
         continue;
       }
       let found: Alloc | undefined;
-      for (const s of [...schemas].sort((a, b) => a.maxHours - b.maxHours)) {
+      // Rank the combinations with the configured sort order, like OneStock.
+      const order = sortOrderFor(mockSortOrders, config.delivery_method, salesChannel);
+      const ranked = [...schemas].sort((a, b) => {
+        for (const c of order?.sort_criterias ?? [{ field: 'eta_end', desc: false }]) {
+          const va = criterionValue(a, c.field) ?? 0;
+          const vb = criterionValue(b, c.field) ?? 0;
+          if (va !== vb) return c.desc ? vb - va : va - vb;
+        }
+        return 0;
+      });
+      for (const s of ranked) {
         const origin = zoneEndpoints(ctx.zones.get(s.originZoneId ?? ''), ctx).find(
           (e) => (stock[e.id]?.[line.item_id] ?? 0) >= line.qty && (!isStoreToStoreOnly(s) || e.id !== destEndpoint(req.destination)),
         );
@@ -320,6 +347,10 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
         stocks: eps.flatMap((e) => items.filter((i) => (stock[e]?.[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: stock[e][i], type: 'on_hand' }))),
       };
     }
+    case '/sort_orders':
+      return { sort_orders: mockSortOrders };
+    case '/delivery_restrictions':
+      return { delivery_restrictions: mockRestrictions };
     case '/sales_channels':
       return { sales_channels: mockSalesChannels };
     case '/items':

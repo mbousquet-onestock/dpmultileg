@@ -2,7 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { timingSafeEqual } from 'node:crypto';
 import { collectStockLines } from '../../shared/logistics.js';
 import { asList } from '../../shared/normalize.js';
-import type { DeliveryConfig, DeliveryRoute, Endpoint, Item, SalesChannel, Zone } from '../../shared/types.js';
+import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
 import { getStore } from './db.js';
 import { errorFields, log } from './logger.js';
@@ -182,7 +182,29 @@ export function apiRouter(): Router {
       const endpoints = endpointIds.length
         ? await cached(t, `endpoints:${endpointIds.join(',')}`, async () => fetchEndpoints(t, { endpoint_ids: endpointIds }))
         : [];
-      res.json({ delivery_configs: configs, delivery_routes: routes, zones, sales_channels: salesChannels, endpoints });
+      // Optional referential explaining the choices (internal routes: tolerate missing rights / versions).
+      const optional = async <T extends { id: string }>(name: string, path: string, key: string): Promise<T[]> =>
+        cached(t, name, async () => {
+          try {
+            return asList<T>(await callOnestock(t, 'GET', path), key);
+          } catch (e) {
+            log('warn', 'optional_referential_unavailable', { request_id: req.requestId, path, error: e instanceof Error ? e.message : String(e) });
+            return [] as T[];
+          }
+        });
+      const [sortOrders, restrictions] = await Promise.all([
+        optional<SortOrder>('sort_orders', '/sort_orders', 'sort_orders'),
+        optional<DeliveryRestriction>('delivery_restrictions', '/delivery_restrictions', 'delivery_restrictions'),
+      ]);
+      res.json({
+        delivery_configs: configs,
+        delivery_routes: routes,
+        zones,
+        sales_channels: salesChannels,
+        endpoints,
+        sort_orders: sortOrders,
+        delivery_restrictions: restrictions,
+      });
     }),
   );
 
@@ -239,6 +261,8 @@ export function apiRouter(): Router {
       };
       if (typeof b.price === 'number') payload.pricing_details = { price: b.price };
       if (typeof b.from === 'number') payload.from = b.from;
+      // Detailed OneStock computation (sort order, restrictions, routes, stocks used) for the explanation panel.
+      if (b.debug === true) payload.debug = { all: true };
       const result = await callOnestock(t, 'GET', '/delivery_promises', payload);
       res.json({ request: payload, response: result });
     }),

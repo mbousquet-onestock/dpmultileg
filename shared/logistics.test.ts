@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { mockConfigs, mockEndpoints, mockRoutes, mockZones } from '../server/src/mock.js';
+import { mockConfigs, mockEndpoints, mockRestrictions, mockRoutes, mockSortOrders, mockZones } from '../server/src/mock.js';
 import {
   buildSchemas,
   collectStockLines,
+  decisiveCriterion,
+  restrictionsForRoute,
+  sortOrderFor,
   isStockZone,
   matchShipmentsToSchemas,
   orderLegs,
@@ -130,5 +133,31 @@ describe('selected schema and why', () => {
     const fromWh = schemas.find((s) => ids(s) === 'r_wh_hub_paris>r_hub_idf_sdd')!;
     expect(originAvailability(fromStores, [{ item_id: 'P', qty: 1 }], stock, ctx)[0].endpoints).toEqual([]);
     expect(originAvailability(fromWh, [{ item_id: 'P', qty: 1 }], stock, ctx)[0].endpoints).toEqual([{ id: 'WH_TLS', quantity: 4 }]);
+  });
+});
+
+describe('priorities', () => {
+  const dest = { location: { country: 'FR', zip_code: '75011' } };
+  const schemas = buildSchemas(cfg('cfg_sdd'), dest, mockRoutes, ctx);
+  const byIds = (k: string) => schemas.find((s) => ids(s) === k)!;
+
+  it('finds the sort order of a method / channel', () => {
+    expect(sortOrderFor(mockSortOrders, 'SDD', 'ecom_fr')?.id).toBe('so_sdd');
+    expect(sortOrderFor(mockSortOrders, 'CKC', 'ecom_fr')).toBeUndefined();
+  });
+
+  it('gives the decisive criterion', () => {
+    const order = { id: 'x', sort_criterias: [{ field: 'cost' }, { field: 'eta_end' }] };
+    // hub route costs 1.2 + 9 = 10.2, store route 8: the store route wins on cost
+    const d = decisiveCriterion(order, byIds('r_stores_idf_sdd'), byIds('r_wh_hub_paris>r_hub_idf_sdd'))!;
+    expect(d).toMatchObject({ rank: 1, field: 'cost', chosenBetter: true });
+    // the other way round: the "other" one looks better -> it must have been excluded
+    expect(decisiveCriterion(order, byIds('r_wh_hub_paris>r_hub_idf_sdd'), byIds('r_stores_idf_sdd'))!.chosenBetter).toBe(false);
+  });
+
+  it('lists the restrictions of a route carrier', () => {
+    const route = mockRoutes.find((r) => r.id === 'r_hub_idf_sdd')!;
+    expect(restrictionsForRoute(route, mockRestrictions).map((r) => r.id)).toEqual(['res_bulky_courier']);
+    expect(restrictionsForRoute(mockRoutes.find((r) => r.id === 'r_wh_fr_colissimo')!, mockRestrictions)).toEqual([]);
   });
 });

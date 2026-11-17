@@ -1,4 +1,4 @@
-import type { DeliveryConfig, DeliveryRoute, Endpoint, Item, PromiseOption, SalesChannel, Zone } from '@shared/types';
+import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, PromiseOption, SalesChannel, SortOrder, Zone } from '@shared/types';
 
 export interface Referential {
   delivery_configs: DeliveryConfig[];
@@ -6,6 +6,8 @@ export interface Referential {
   zones: Zone[];
   sales_channels: SalesChannel[];
   endpoints: Endpoint[];
+  sort_orders?: SortOrder[];
+  delivery_restrictions?: DeliveryRestriction[];
 }
 
 export interface SessionInfo {

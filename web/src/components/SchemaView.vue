@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { OsAlert, OsBadge, OsCardLayout, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
+import { OsAlert, OsBadge, OsButton, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
 import {
+  criterionKind,
+  decisiveCriterion,
   formatHours,
+  restrictionsForRoute,
+  routeConstraints,
+  sortOrderFor,
   matchShipmentsToSchemas,
   originAvailability,
   schemaCost,
@@ -13,7 +18,7 @@ import {
 import { computed, ref, watch } from 'vue';
 import { api } from '../api';
 import { formatDate, formatMoney, t } from '../i18n';
-import { currency, destination, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
+import { currency, destination, endpoints, itemLabel, runDebug, selectedSchemas, state, zoneCtx } from '../store';
 import SchemaChain from './SchemaChain.vue';
 
 const data = computed(() => selectedSchemas.value);
@@ -23,6 +28,50 @@ const units = computed(() => ({ hour: t('hour'), day: t('day') }));
 const zoneName = (id: string) => zoneCtx.value.zones.get(id)?.name ?? id;
 const endpointName = (id: string) => endpoints.value.find((e) => e.id === id)?.name ?? id;
 const transit = (s: LogisticSchema) => formatHours(s.minHours, s.maxHours, units.value);
+
+/* ------------------------------------------------------------------ priorities (GET /sort_orders) */
+
+const sortOrder = computed(() =>
+  option.value ? sortOrderFor(state.referential?.sort_orders ?? [], option.value.delivery_method, state.salesChannel) : undefined,
+);
+function criterionLabel(field: string): string {
+  const f = field.toLowerCase();
+  if (/eta|delay|time|date|lead/.test(f)) return t('critEta');
+  if (/carbon|co2|footprint/.test(f)) return t('critCarbon');
+  if (/cost|price|fee/.test(f)) return t('critCost');
+  if (/shipment|split/.test(f)) return t('critShipments');
+  return field;
+}
+function criterionFormat(field: string, v: number): string {
+  if (criterionKind(field) === 'time') return formatHours(v, v, units.value);
+  if (/cost|price|fee/i.test(field)) return formatMoney(v, currency.value);
+  return String(Math.round(v * 100) / 100);
+}
+
+/* ------------------------------------------------------------------ OneStock detailed computation (debug) */
+
+const debugOpen = ref(false);
+const debugState = ref<'idle' | 'loading' | 'error'>('idle');
+const debugResult = ref<unknown>(null);
+const debugError = ref('');
+async function loadDebug() {
+  if (!option.value) return;
+  debugState.value = 'loading';
+  debugError.value = '';
+  try {
+    debugResult.value = await runDebug(option.value.delivery_method);
+    debugOpen.value = true;
+    debugState.value = 'idle';
+  } catch (e) {
+    debugError.value = e instanceof Error ? e.message : String(e);
+    debugState.value = 'error';
+  }
+}
+watch(option, () => {
+  debugResult.value = null;
+  debugOpen.value = false;
+  debugState.value = 'idle';
+});
 
 /* ------------------------------------------------------------------ stock at the origins (to explain the choice) */
 
@@ -112,7 +161,9 @@ const rows = computed<Row[]>(() => {
       reasons.unshift({ ok: true, text: t('whyChosenByPromise') });
       if (r.returnedLegs && r.returnedLegs < r.schema.legs.length)
         reasons.push({ ok: null, text: t('whyPartialLegs').replace('{n}', String(r.returnedLegs)).replace('{m}', String(r.schema.legs.length)) });
-      if (hasStock(r) && stocked.length > 1) {
+      if (sortOrder.value?.sort_criterias?.length) {
+        reasons.push({ ok: true, text: t('whyRankedFirst') });
+      } else if (hasStock(r) && stocked.length > 1) {
         if (r.schema.maxHours <= fastest) reasons.push({ ok: true, text: t('whyFastest') });
         else if (r.cost !== undefined && r.cost <= cheapest) reasons.push({ ok: true, text: t('whyCheapest') });
         else {
@@ -121,8 +172,17 @@ const rows = computed<Row[]>(() => {
         }
       }
     } else if (ref0) {
+      const decision = hasStock(r) ? decisiveCriterion(sortOrder.value, ref0.schema, r.schema) : undefined;
       if (!hasStock(r)) {
         /* the stock reason is already given */
+      } else if (decision) {
+        const vals = (txt: string) =>
+          txt
+            .replace('{rank}', String(decision.rank))
+            .replace('{label}', criterionLabel(decision.field))
+            .replace('{chosen}', criterionFormat(decision.field, decision.chosen))
+            .replace('{other}', criterionFormat(decision.field, decision.other));
+        reasons.push(decision.chosenBetter ? { ok: false, text: vals(t('whyLostOnCriterion')) } : { ok: null, text: vals(t('whyBetterButExcluded')) });
       } else if (r.schema.maxHours > ref0.schema.maxHours) {
         reasons.push({ ok: false, text: t('whySlower').replace('{a}', transit(r.schema)).replace('{b}', transit(ref0.schema)) });
       } else if (r.cost !== undefined && ref0.cost !== undefined && r.cost > ref0.cost) {
@@ -130,6 +190,14 @@ const rows = computed<Row[]>(() => {
       } else {
         reasons.push({ ok: null, text: t('whyNotChosenOther') });
       }
+    }
+    // Restrictions and constraints of the carriers used (possible exclusion causes, to check against the items).
+    for (const leg of r.schema.legs) {
+      const carrier = `${leg.route.carrier.name} · ${leg.route.carrier.option}`;
+      for (const res of restrictionsForRoute(leg.route, state.referential?.delivery_restrictions ?? []))
+        reasons.push({ ok: null, text: t('whyRestriction').replace('{carrier}', carrier).replace('{what}', res.description ?? res.id) });
+      const constraints = routeConstraints(leg.route);
+      if (constraints.length) reasons.push({ ok: null, text: t('whyConstraint').replace('{carrier}', carrier).replace('{what}', constraints.join(', ')) });
     }
     r.reasons = reasons;
   }
@@ -190,6 +258,17 @@ const anyChosen = computed(() => rows.value.some((r) => r.chosen));
           <span class="os-text-secondary">{{ t('zones') }} :</span>
           <OsTag v-for="z in data.entry.config.delivery_zone_ids ?? []" :key="z" :text="zoneName(z)" readonly color="blue" />
         </div>
+        <div class="priorities">
+          <span class="os-body-l">{{ t('prioritiesTitle') }}</span>
+          <ol v-if="sortOrder?.sort_criterias?.length" class="os-body-s">
+            <li v-for="(c, k) in sortOrder.sort_criterias" :key="k">
+              <strong>{{ criterionLabel(c.field) }}</strong>
+              <span class="os-text-secondary"> ({{ c.field }}, {{ c.desc ? t('critDesc') : t('critAsc') }})</span>
+            </li>
+          </ol>
+          <span v-else class="os-body-s os-text-secondary">{{ t('prioritiesNone') }}</span>
+          <span class="os-body-s os-text-secondary">{{ t('prioritiesHint') }}</span>
+        </div>
         <OsAlert v-if="option.status !== 'none' && data.theoretical.length && !anyChosen" type="info" :subtitle="t('whyNoRoutesReturned')" />
         <p v-if="!data.theoretical.length" class="os-label-s os-text-secondary">{{ t('noSchema') }}</p>
 
@@ -208,6 +287,22 @@ const anyChosen = computed(() => rows.value.some((r) => r.chosen));
           <p v-else-if="stockState === 'loading'" class="os-body-s os-text-secondary reasons">{{ t('whyLoading') }}</p>
         </div>
         <p v-if="stockState === 'error'" class="os-body-s os-text-secondary">{{ t('whyStockUnavailable') }}</p>
+      </section>
+
+      <OsDivider />
+      <section class="block">
+        <div class="debug-head">
+          <div class="section-head">
+            <span class="os-label-l">{{ t('debugTitle') }}</span>
+            <span class="os-body-s os-text-secondary">{{ t('debugHint') }}</span>
+          </div>
+          <OsButton type="secondary" icon="search" :text="t('debugRun')" :pending="debugState === 'loading'" @click="loadDebug" />
+        </div>
+        <OsAlert v-if="debugState === 'error'" type="danger" :subtitle="debugError" />
+        <OsCollapse v-if="debugResult" v-model="debugOpen">
+          <template #header><span class="os-body-l">{{ t('debugResult') }}</span></template>
+          <template #content><pre class="raw">{{ JSON.stringify(debugResult, null, 2) }}</pre></template>
+        </OsCollapse>
       </section>
     </div>
   </OsCardLayout>
@@ -235,4 +330,9 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .reasons .ko { color: var(--os-neutral-700); }
 .reasons .ko :deep(.os-icon) { color: var(--os-red-1000); }
 .reasons .info :deep(.os-icon) { color: var(--os-blue-1000); }
+.priorities { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 5px; background: var(--os-neutral-t-30); }
+.priorities .os-body-l { color: var(--os-text-primary); }
+.priorities ol { margin: 0; padding-left: 20px; color: var(--os-text-primary); }
+.debug-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.raw { margin: 0; max-height: 420px; overflow: auto; background: var(--os-neutral-30); border: 1px solid var(--os-border); border-radius: 5px; padding: 12px; font-size: 12px; }
 </style>
