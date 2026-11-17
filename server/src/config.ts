@@ -7,12 +7,16 @@ function bool(v: string | undefined, def = false): boolean {
 
 const isProd = process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
 
+/** Required environment variables missing in production (reported by /api/health and every API error). */
+export const missingEnv: string[] = [];
+
 function secret(name: string): string {
   const v = process.env[name];
   if (v) return v;
-  if (isProd) throw new Error(`Missing required environment variable ${name}`);
-  // Dev only: ephemeral secret, regenerated on every restart.
-  console.warn(`[config] ${name} not set, using an ephemeral development value`);
+  // Don't crash at import time (the platform would answer an opaque HTML error): record the problem,
+  // the API then answers a JSON 503 "server_misconfigured" listing what is missing.
+  if (isProd) missingEnv.push(name);
+  else console.warn(`[config] ${name} not set, using an ephemeral development value`);
   return randomBytes(32).toString('hex');
 }
 
@@ -41,4 +45,12 @@ export const config = {
   /** Origins allowed to embed the extension (CSP frame-ancestors). */
   frameAncestors: process.env.FRAME_ANCESTORS ?? "'self' https://*.onestock-retail.com https://*.onestock-retail.dev",
   isProd,
+  onVercel: !!process.env.VERCEL,
 };
+
+/** Configuration problems preventing the API from working. */
+export function configProblems(): string[] {
+  const problems = missingEnv.map((n) => `missing environment variable ${n}`);
+  if (config.onVercel && !config.databaseUrl) problems.push('missing DATABASE_URL (Vercel has no persistent disk: add Neon Postgres from the Marketplace)');
+  return problems;
+}

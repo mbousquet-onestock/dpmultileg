@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { OsAlert, OsBadge, OsButton, OsIcon } from '@onestock-public/design-system';
+import { OsBadge, OsButton, OsIcon } from '@onestock-public/design-system';
 import { computed, onMounted, ref } from 'vue';
-import { api, ApiError, type SessionInfo } from './api';
+import { api, type SessionInfo } from './api';
 import ItemsSection from './components/ItemsSection.vue';
 import OptionsSection from './components/OptionsSection.vue';
 import ResultsList from './components/ResultsList.vue';
 import SchemaView from './components/SchemaView.vue';
+import ErrorPanel from './components/ErrorPanel.vue';
 import StandaloneConnect from './components/StandaloneConnect.vue';
 import { autoResize, handshake, isEmbedded, readParams } from './extension';
 import { setLocale, t } from './i18n';
@@ -15,32 +16,30 @@ const params = readParams();
 setLocale(params.lang ?? navigator.language, params.locale, params.timezone);
 
 const phase = ref<'connecting' | 'standalone' | 'ready' | 'error'>('connecting');
-const error = ref('');
+const error = ref<unknown>(null);
+const step = ref('');
+/** Calling context shown in the diagnostic (no secret: the signature is masked). */
+const context = ref<Record<string, unknown>>({ embedded: isEmbedded(), params });
 const session = ref<SessionInfo>();
 const channelName = computed(() => {
   const s = salesChannels.value.find((c) => c.id === state.salesChannel);
   return s?.name ?? s?.id ?? '';
 });
 
-function explain(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.code === 'missing_credentials') return t('missingCredentials');
-    if (e.code === 'invalid_signature') return t('invalidSignature');
-    const d = e.details as { message?: string } | undefined;
-    return `${t('genericError')} : ${e.code}${d?.message ? ` – ${d.message}` : ''}`;
-  }
-  return `${t('genericError')} : ${e instanceof Error ? e.message : String(e)}`;
-}
 
 async function start(payload: Record<string, unknown>) {
   phase.value = 'connecting';
-  error.value = '';
+  error.value = null;
+  context.value = { ...context.value, session_request: { ...payload, extension_signature: payload.extension_signature ? '***' : undefined } };
   try {
+    step.value = t('step_session');
     session.value = await api.openSession(payload);
+    context.value = { ...context.value, session: { site_id: session.value.site_id, environment: session.value.environment, signed: session.value.signed } };
+    step.value = t('step_referential');
     await loadReferential();
     phase.value = 'ready';
   } catch (e) {
-    error.value = explain(e);
+    error.value = e;
     phase.value = isEmbedded() ? 'error' : 'standalone';
   }
 }
@@ -49,7 +48,12 @@ onMounted(async () => {
   autoResize(params);
   if (isEmbedded()) {
     try {
+      step.value = t('step_handshake');
       const data = await handshake(params);
+      context.value = {
+        ...context.value,
+        onestock_data: { ...data, extension_signature: data.extension_signature ? `${String(data.extension_signature).slice(0, 12)}…` : undefined },
+      };
       await start({
         site_id: data.site_id ?? params.site_id,
         user_id: data.user_id ?? params.user_id,
@@ -59,7 +63,7 @@ onMounted(async () => {
         lang: params.lang,
       });
     } catch (e) {
-      error.value = explain(e);
+      error.value = e;
       phase.value = 'error';
     }
   } else {
@@ -88,11 +92,11 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
     </div>
 
     <template v-else-if="phase === 'standalone'">
-      <OsAlert v-if="error" type="danger" :subtitle="error" class="mb" />
+      <ErrorPanel v-if="error" :key="String(error)" :error="error" :step="step" :context="context" class="mb" />
       <StandaloneConnect @connect="start({ ...$event, user_id: 'standalone' })" />
     </template>
 
-    <OsAlert v-else-if="phase === 'error'" type="danger" :title="t('genericError')" :subtitle="error" />
+    <ErrorPanel v-else-if="phase === 'error'" :error="error" :step="step" :context="context" />
 
     <div v-else class="layout">
       <div class="form">
@@ -114,7 +118,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
       <div class="output">
         <section>
           <h2 class="os-label-l section-title">{{ t('results') }}</h2>
-          <OsAlert v-if="state.error" type="danger" :title="t('genericError')" :subtitle="state.error" class="mb" />
+          <ErrorPanel v-if="state.error" :key="String(state.error)" :error="state.error" :step="t('step_test')" :context="context" class="mb" />
           <p v-if="!state.results" class="os-label-s os-text-secondary empty">{{ t('noResult') }}</p>
           <template v-else>
             <p class="os-body-s os-text-secondary hint">{{ t('resultsHint') }}</p>

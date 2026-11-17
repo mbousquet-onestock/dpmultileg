@@ -1,7 +1,7 @@
 import { buildSchemas, deliveryMethods, shipmentsFromPromise, type ZoneContext } from '@shared/logistics';
 import type { DeliveryConfig, Destination, Endpoint, Item, PromiseOption } from '@shared/types';
 import { computed, reactive } from 'vue';
-import { api, ApiError, type Referential } from './api';
+import { api, type Referential } from './api';
 import { lang } from './i18n';
 
 export type DestinationType = 'address' | 'zone' | 'endpoint';
@@ -24,7 +24,7 @@ export const state = reactive({
   methods: { enabled: false, values: [] as string[] },
   date: { enabled: false, value: '' },
   running: false,
-  error: '' as string,
+  error: null as unknown,
   results: null as ResultEntry[] | null,
   exchange: null as { request: unknown; response: unknown } | null,
   selected: -1,
@@ -86,7 +86,7 @@ export async function loadEndpoints(query = '') {
 export async function runTest() {
   if (!canRun.value || !destination.value) return;
   state.running = true;
-  state.error = '';
+  state.error = null;
   state.selected = -1;
   try {
     const methods = state.methods.enabled && state.methods.values.length ? state.methods.values : channelMethods.value.map((c) => c.delivery_method);
@@ -113,17 +113,13 @@ export async function runTest() {
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
     state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;
   } catch (e) {
-    state.error = e instanceof ApiError ? describeError(e) : String(e);
+    state.error = e;
     state.results = null;
   } finally {
     state.running = false;
   }
 }
 
-function describeError(e: ApiError): string {
-  const d = e.details as { message?: string; details?: { message?: string; error?: string } } | undefined;
-  return [e.code, d?.details?.message ?? d?.details?.error ?? d?.message].filter(Boolean).join(' – ');
-}
 
 /** Schema(s) for the selected result: actual routes when returned by the API, theoretical ones from the configuration. */
 export const selectedSchemas = computed(() => {

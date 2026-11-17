@@ -1,5 +1,6 @@
 import { config } from './config.js';
 import { getCredential } from './credentials.js';
+import { log } from './logger.js';
 import { mockOnestock } from './mock.js';
 
 export class OnestockError extends Error {
@@ -7,9 +8,17 @@ export class OnestockError extends Error {
     public status: number,
     public body: unknown,
     message?: string,
+    public path?: string,
+    public requestId?: string,
   ) {
-    super(message ?? `OneStock API error ${status}`);
+    super(message ?? describe(status, body, path));
   }
+}
+
+function describe(status: number, body: unknown, path?: string): string {
+  const b = body as { message?: string; error?: string; errors?: unknown } | string | undefined;
+  const detail = typeof b === 'string' ? b.slice(0, 200) : (b?.message ?? b?.error ?? (b?.errors ? JSON.stringify(b.errors).slice(0, 200) : ''));
+  return `OneStock ${path ?? ''} answered ${status}${detail ? `: ${detail}` : ''}`;
 }
 
 interface Target {
@@ -29,12 +38,22 @@ async function rawCall(apiUrl: string, method: 'GET' | 'POST' | 'PATCH' | 'DELET
     httpMethod = 'POST';
     headers['X-HTTP-Method-Override'] = 'GET';
   }
-  const res = await fetch(`${apiUrl}${path}`, {
-    method: httpMethod,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
+  const started = Date.now();
+  let res: Response;
+  try {
+    res = await fetch(`${apiUrl}${path}`, {
+      method: httpMethod,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (e) {
+    const cause = e instanceof Error ? ((e.cause as Error | undefined)?.message ?? e.message) : String(e);
+    log('error', 'onestock_unreachable', { api_host: new URL(apiUrl).host, path, ms: Date.now() - started, error: cause });
+    throw new OnestockError(502, { error: 'unreachable', cause }, `OneStock API unreachable (${new URL(apiUrl).host}${path}): ${cause}`, path);
+  }
+  const requestId = res.headers.get('request-id') ?? undefined;
+  log(res.ok ? 'debug' : 'warn', 'onestock_call', { api_host: new URL(apiUrl).host, method, path, status: res.status, ms: Date.now() - started, onestock_request_id: requestId });
   const text = await res.text();
   let json: unknown = undefined;
   try {
@@ -42,17 +61,18 @@ async function rawCall(apiUrl: string, method: 'GET' | 'POST' | 'PATCH' | 'DELET
   } catch {
     json = text;
   }
-  if (!res.ok) throw new OnestockError(res.status, json);
+  if (!res.ok) throw new OnestockError(res.status, json, undefined, path, requestId);
   return json;
 }
 
 async function login(t: Target): Promise<string> {
   const cred = await getCredential(t.site_id, t.environment);
-  if (!cred) throw new OnestockError(412, { error: 'missing_credentials' }, `No credentials stored for ${t.site_id}/${t.environment}`);
+  if (!cred) throw new OnestockError(412, { error: 'missing_credentials' }, `No credentials stored for ${t.site_id}/${t.environment}`, '/login');
+  log('info', 'onestock_login', { site_id: t.site_id, environment: t.environment, api_host: new URL(t.api_url).host, user_id: cred.user_id });
   const res = (await rawCall(t.api_url, 'POST', '/login', { site_id: t.site_id, user_id: cred.user_id, password: cred.password })) as {
     token?: string;
   };
-  if (!res?.token) throw new OnestockError(502, res, 'OneStock /login returned no token');
+  if (!res?.token) throw new OnestockError(502, res, 'OneStock /login returned no token', '/login');
   return res.token;
 }
 

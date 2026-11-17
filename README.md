@@ -126,6 +126,13 @@ npm run typecheck
 npm run build && npm start
 ```
 
+## Diagnostic des erreurs
+
+- **À l'écran** : chaque erreur précise l'étape qui a échoué (handshake, session, référentiel, test), le statut HTTP, le code, le message (de l'API OneStock le cas échéant), une piste de résolution et le `request id`. Le bloc *Détails techniques* contient le contexte reçu de OneStock (paramètres d'URL, `onestock_data`, signature masquée), la réponse brute et l'état du serveur (`/api/health`). Le bouton *Copier le diagnostic* copie l'ensemble, qui est aussi écrit dans la console du navigateur (`[dpmultileg]`).
+- **Côté serveur** (Vercel > Logs) : une ligne JSON par requête (`msg: http`, `request_id`, statut, durée, site, environnement), et des événements dédiés : `session_request`, `session_missing_credentials`, `session_invalid_signature` (avec la raison), `onestock_login`, `onestock_call` (avec le `Request-Id` OneStock), `onestock_error`, `onestock_unreachable`, `internal_error` et `startup_failed`. Mots de passe, tokens et signatures ne sont jamais journalisés. `LOG_LEVEL=debug` journalise aussi les appels OneStock réussis.
+- **`GET /api/health`** : variables manquantes, connexion à la base, liste des couples site/environnement configurés, version Node, région et commit Vercel.
+- Si une variable obligatoire manque, l'API répond un JSON `503 server_misconfigured` qui la nomme, au lieu de planter. Si la fonction Vercel ne démarre pas, `api/index.ts` renvoie l'erreur en JSON (`startup_failed`).
+
 ## Hypothèses et limites
 
 - Les routes `GET /delivery_configs`, `/delivery_routes` et `/zones` sont internes et leur réponse n'est pas documentée : `shared/normalize.ts` accepte un tableau, un objet indexé par id ou une enveloppe `{ delivery_routes: [...] }`.

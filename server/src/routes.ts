@@ -1,7 +1,9 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { asList } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRoute, Endpoint, Item, SalesChannel, Zone } from '../../shared/types.js';
-import { config } from './config.js';
+import { config, configProblems } from './config.js';
+import { getStore } from './db.js';
+import { errorFields, log } from './logger.js';
 import {
   deleteCredential,
   listCredentials,
@@ -24,8 +26,34 @@ const target = (s: SessionClaims) => ({ site_id: s.site_id, environment: s.envir
 export function apiRouter(): Router {
   const r = Router();
 
-  r.get('/health', (_req, res) => {
-    res.json({ ok: true, mock: config.mockOnestock, allow_unsigned: config.allowUnsigned });
+  /** Diagnostics (no secret): configuration problems, storage, runtime. */
+  r.get('/health', async (req, res) => {
+    const problems = configProblems();
+    let storage: Record<string, unknown> = { kind: config.databaseUrl ? 'postgres' : 'sqlite' };
+    if (!problems.length) {
+      try {
+        const store = await getStore();
+        const rows = await store.list();
+        storage = { kind: store.kind, ok: true, credentials: rows.map((c) => `${c.site_id}/${c.environment}`) };
+      } catch (e) {
+        storage = { ...storage, ok: false, error: e instanceof Error ? e.message : String(e) };
+        log('error', 'storage_unavailable', { request_id: req.requestId, ...errorFields(e) });
+      }
+    }
+    res.json({
+      ok: !problems.length && storage.ok !== false,
+      problems,
+      storage,
+      mock: config.mockOnestock,
+      allow_unsigned: config.allowUnsigned,
+      runtime: {
+        node: process.version,
+        vercel: config.onVercel,
+        region: process.env.VERCEL_REGION ?? null,
+        commit: process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+      },
+      request_id: req.requestId,
+    });
   });
 
   /* ---------------------------------------------------------------- session (extension handshake) */
@@ -37,7 +65,17 @@ export function apiRouter(): Router {
       const siteId = str(body.site_id);
       const userId = str(body.user_id) ?? 'anonymous';
       const apiUrl = str(body.api_url);
-      if (!siteId) return res.status(400).json({ error: 'missing_site_id' });
+      const ctx = {
+        request_id: req.requestId,
+        site_id: siteId,
+        user_id: userId,
+        extension_id: str(body.extension_id),
+        api_url_host: apiUrl ? safeHost(apiUrl) : undefined,
+        environment_requested: str(body.environment),
+        has_signature: !!str(body.extension_signature),
+      };
+      log('info', 'session_request', ctx);
+      if (!siteId) return res.status(400).json({ error: 'missing_site_id', message: 'site_id is missing from the extension URL parameters and the handshake data' });
 
       const cred =
         (await resolveCredential(siteId, apiUrl, str(body.environment))) ??
@@ -45,7 +83,17 @@ export function apiRouter(): Router {
         (config.mockOnestock
           ? { site_id: siteId, environment: str(body.environment) ?? 'demo', api_url: 'https://demo.api.mock.onestock-retail.com', user_id: 'demo', password: '', extension_secrets: [], label: 'demo' }
           : undefined);
-      if (!cred) return res.status(412).json({ error: 'missing_credentials', site_id: siteId, api_url: apiUrl ?? null });
+      if (!cred) {
+        const known = (await listCredentials(siteId)).map((c) => c.environment);
+        log('warn', 'session_missing_credentials', { ...ctx, known_environments: known });
+        return res.status(412).json({
+          error: 'missing_credentials',
+          message: `No credentials stored for site ${siteId} matching ${apiUrl ?? 'no api_url'} (configured environments for this site: ${known.join(', ') || 'none'})`,
+          site_id: siteId,
+          api_url: apiUrl ?? null,
+          known_environments: known,
+        });
+      }
 
       const signed = verifyExtensionSignature(
         { extension_signature: str(body.extension_signature), extension_id: str(body.extension_id), user_id: userId },
@@ -53,11 +101,26 @@ export function apiRouter(): Router {
         config.signatureMaxAgeSeconds,
       );
       if (!signed && !(config.allowUnsigned && cred.extension_secrets.length === 0)) {
-        return res.status(403).json({ error: 'invalid_signature' });
+        const reason = !str(body.extension_signature)
+          ? 'no extension_signature received in onestock_data'
+          : cred.extension_secrets.length === 0
+            ? `no extension secret stored for ${siteId}/${cred.environment} (and ALLOW_UNSIGNED is false)`
+            : 'signature does not match the stored secrets, or is older than the allowed age';
+        log('warn', 'session_invalid_signature', { ...ctx, environment: cred.environment, secrets: cred.extension_secrets.length, reason });
+        return res.status(403).json({ error: 'invalid_signature', message: reason, environment: cred.environment });
       }
 
       const resolvedApiUrl = resolveApiUrl(cred, apiUrl);
-      if (!resolvedApiUrl) return res.status(412).json({ error: 'missing_api_url', site_id: siteId, environment: cred.environment });
+      if (!resolvedApiUrl) {
+        log('warn', 'session_missing_api_url', { ...ctx, environment: cred.environment });
+        return res.status(412).json({
+          error: 'missing_api_url',
+          message: `No api_url stored for ${siteId}/${cred.environment} and the handshake api_url is not an allowed OneStock host`,
+          site_id: siteId,
+          environment: cred.environment,
+        });
+      }
+      log('info', 'session_opened', { ...ctx, environment: cred.environment, signed, api_url_host: safeHost(resolvedApiUrl) });
 
       const session = await issueSession({
         sub: userId,
@@ -195,12 +258,24 @@ export function apiRouter(): Router {
 
   /* ---------------------------------------------------------------- errors */
 
-  r.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  r.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    const base = { request_id: req.requestId, path: req.path, site_id: req.session?.site_id, environment: req.session?.environment };
     if (err instanceof OnestockError) {
-      return res.status(err.status >= 400 && err.status < 600 ? err.status : 502).json({ error: 'onestock_error', status: err.status, message: err.message, details: err.body });
+      log('warn', 'onestock_error', { ...base, onestock_status: err.status, onestock_path: err.path, onestock_request_id: err.requestId, message: err.message });
+      // 401/403 from OneStock are about our API user, not the extension session: don't let the front think its session expired.
+      const status = err.status === 401 || err.status === 403 ? 502 : err.status >= 400 && err.status < 600 ? err.status : 502;
+      return res.status(status).json({
+        error: 'onestock_error',
+        status: err.status,
+        message: err.message,
+        onestock_path: err.path,
+        onestock_request_id: err.requestId,
+        details: err.body,
+        request_id: req.requestId,
+      });
     }
-    console.error(err);
-    res.status(500).json({ error: 'internal_error', message: err instanceof Error ? err.message : String(err) });
+    log('error', 'internal_error', { ...base, ...errorFields(err) });
+    res.status(500).json({ error: 'internal_error', message: err instanceof Error ? err.message : String(err), request_id: req.requestId });
   });
 
   return r;
@@ -225,4 +300,12 @@ function simplifyItem(i: Item, lang: string): Item {
     image: first('image_url') ?? first('image') ?? i.image,
     price: first('price') ?? i.price,
   };
+}
+
+function safeHost(url: string): string | undefined {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'invalid_url';
+  }
 }
