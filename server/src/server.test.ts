@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 process.env.MOCK_ONESTOCK = 'true';
 process.env.ALLOW_UNSIGNED = 'false';
+process.env.VERIFY_SIGNATURE = 'true';
 process.env.DB_PATH = ':memory:';
 process.env.CREDENTIALS_KEY = 'a'.repeat(64);
 process.env.JWT_SECRET = 'test-secret';
@@ -127,5 +128,15 @@ describe('API', () => {
       .expect(400);
     expect(bad.body.message).toContain('api_url');
   });
-});
 
+  it('lets a signed OneStock session configure its own site only', async () => {
+    await request(app).get('/api/admin/credentials').set('Authorization', `Bearer ${token}`).expect(200);
+    await request(app)
+      .put('/api/admin/credentials/c00/qualif')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ user_id: 'from_onestock' })
+      .expect(200);
+    const other = await request(app).put('/api/admin/credentials/c42/qualif').set('Authorization', `Bearer ${token}`).send({ user_id: 'x', password: 'y' });
+    expect(other.status).toBe(403);
+  });
+});

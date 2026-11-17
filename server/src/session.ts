@@ -11,6 +11,8 @@ export interface SessionClaims {
   api_url: string;
   extension_id?: string;
   lang?: string;
+  /** The session was opened with a valid OneStock extension signature (user authenticated by OneStock). */
+  signed?: boolean;
 }
 
 const key = () => new TextEncoder().encode(config.jwtSecret);

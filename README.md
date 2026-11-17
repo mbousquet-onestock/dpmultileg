@@ -26,7 +26,7 @@ Le contrat suivi est celui de [UI Extensibility – How to develop UI Extensions
 
 1. OneStock charge l'iframe avec `extension_id, user_id, site_id, lang, timezone, locale, parent_url, injection_point_path, host_app`.
 2. Le front envoie `extension_ready` à l'origine de `parent_url` et reçoit `onestock_data` (`api_url`, `extension_signature`…). L'origine du message est vérifiée.
-3. `POST /api/session` : le back-end retrouve les identifiants du **site** et de l'**environnement** (déduit de `api_url` : `qualif`, `training`, `prod`…), vérifie la signature (HMAC-SHA256 de `${t}.${extension_id}##${user_id}`, h0/h1/h2, 6 h maximum) avec les secrets d'extension stockés, puis émet un JWT court.
+3. `POST /api/session` : le back-end retrouve les identifiants du **site** et de l'**environnement** (déduit de `api_url` : `qualif`, `training`, `prod`…) et émet un JWT court. **La signature de l'extension n'est pas vérifiée par défaut.** Avec `VERIFY_SIGNATURE=true`, elle est contrôlée (HMAC-SHA256 de `${t}.${extension_id}##${user_id}`, h0/h1/h2, 6 h maximum) avec le secret d'extension enregistré pour le site et l'environnement.
 4. Les appels OneStock passent par le back-end : un token est obtenu via `POST /login` avec l'utilisateur et le mot de passe stockés. Il est mis en cache par site et environnement, puis renouvelé automatiquement en cas de 401. Les identifiants ne quittent jamais le serveur et ne sont envoyés qu'à l'`api_url` enregistrée, ou à défaut à un hôte `*.onestock-retail.(com|dev)`.
 5. Le front demande le redimensionnement de l'iframe (`extension_resize`) et utilise `lang`, `locale` et `timezone` pour les traductions (fr/en) et les dates.
 
@@ -36,7 +36,7 @@ Les GET OneStock avec corps sont envoyés en `POST` + `X-HTTP-Method-Override: G
 
 Table `credentials` / `dpm_credentials` : `site_id`, `environment`, `user_id`, `password` (chiffré AES-256-GCM), `api_url` (optionnelle), `extension_secrets` (secrets de signature, chiffrés), `label`.
 
-**Depuis l'interface (onglet caché « Configuration API »)** : cliquer sur l'engrenage discret en haut à droite, ou sur « Configurer les identifiants » dans une erreur d'identifiants ou de signature. On peut aussi ouvrir l'onglet directement avec `?config=1`. Il faut saisir le jeton d'administration (variable `ADMIN_TOKEN`), puis le site, l'environnement (tous deux pré-remplis d'après le contexte OneStock), l'utilisateur API, le mot de passe et, en option, l'URL d'API et le secret d'extension. « Tester la connexion » appelle `POST /login` sans rien enregistrer. « Enregistrer » chiffre et stocke les identifiants, vide le cache de tokens, puis relance la connexion. Laisser le mot de passe ou le secret vide conserve la valeur déjà enregistrée. Ces valeurs ne sont jamais renvoyées au navigateur.
+**Depuis l'interface (onglet caché « Configuration API »)** : cliquer sur l'engrenage discret en haut à droite, ou sur « Configurer les identifiants » dans une erreur d'identifiants ou de signature. On peut aussi ouvrir l'onglet directement avec `?config=1`. Le mot de passe d'administration (variable `ADMIN_TOKEN`) n'est demandé que si cette variable est définie. Sans elle, l'écran est ouvert à toute personne qui a l'URL et un avertissement l'indique. On saisit ensuite le site, l'environnement (tous deux pré-remplis d'après le contexte OneStock), l'utilisateur API, le mot de passe et, en option, l'URL d'API (et le secret d'extension si `VERIFY_SIGNATURE=true`). « Tester la connexion » appelle `POST /login` sans rien enregistrer. « Enregistrer » chiffre et stocke les identifiants, vide le cache de tokens, puis relance la connexion. Laisser le mot de passe ou le secret vide conserve la valeur déjà enregistrée. Ces valeurs ne sont jamais renvoyées au navigateur.
 
 ![Configuration](docs/configuration.png)
 
@@ -68,7 +68,7 @@ curl -X PUT https://<app>/api/admin/credentials/c00/qualif \
 
 1. Importer le dépôt dans Vercel. `vercel.json` configure le build (`npm run build:web` → `web/dist`), la fonction `api/index.ts` (toutes les routes `/api/*`), le fallback SPA et l'en-tête `Content-Security-Policy: frame-ancestors` (back-offices OneStock uniquement).
 2. **Base de données** : le système de fichiers Vercel est éphémère, SQLite n'y est donc pas utilisable. Ajouter **Neon Postgres** depuis *Storage / Marketplace* : la variable `DATABASE_URL` est injectée et la table est créée au premier appel.
-3. Variables d'environnement : `CREDENTIALS_KEY` (`openssl rand -hex 32`), `JWT_SECRET`, `ADMIN_TOKEN`. Pour une démo sans OneStock : `MOCK_ONESTOCK=true` et `ALLOW_UNSIGNED=true`.
+3. Variables d'environnement **obligatoires** : `CREDENTIALS_KEY` et `JWT_SECRET`, deux chaînes aléatoires de 64 caractères hexadécimaux (`openssl rand -hex 32`). Variables **optionnelles** : `ADMIN_TOKEN` (protège l'onglet de configuration, fortement recommandé) et `VERIFY_SIGNATURE=true` (active la vérification de la signature). Pour une démo sans OneStock : `MOCK_ONESTOCK=true` et `ALLOW_UNSIGNED=true`.
 4. Enregistrer les identifiants via l'API admin (voir ci-dessus) avec l'URL Vercel.
 5. Déclarer l'extension dans OneStock (`POST /extensions`), par exemple :
 

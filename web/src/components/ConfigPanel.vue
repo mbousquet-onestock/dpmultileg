@@ -5,10 +5,10 @@
  */
 import { OsAlert, OsBadge, OsButton, OsCardLayout, OsDivider, OsEntity, OsInputText, OsPicto } from '@onestock-public/design-system';
 import { computed, onMounted, ref, watch } from 'vue';
-import { adminApi, ApiError, type CredentialSummary } from '../api';
+import { adminApi, api, ApiError, type CredentialSummary } from '../api';
 import { t } from '../i18n';
 
-const props = defineProps<{ siteId?: string; environment?: string; handshakeApiUrl?: string }>();
+const props = defineProps<{ siteId?: string; environment?: string; handshakeApiUrl?: string; signedSite?: string }>();
 const emit = defineEmits<{ saved: [{ site_id: string; environment: string }] }>();
 
 const TOKEN_KEY = 'dpm.adminToken';
@@ -36,7 +36,12 @@ const busy = ref<'' | 'list' | 'test' | 'save'>('');
 const result = ref<{ type: 'success' | 'danger' | 'info'; title: string; subtitle?: string } | null>(null);
 
 const existing = computed(() => list.value.find((c) => c.site_id === cred.value.site_id && c.environment === cred.value.environment));
-const canSubmit = computed(() => !!adminToken.value && !!cred.value.site_id && !!cred.value.environment && !!cred.value.user_id && (!!cred.value.password || !!existing.value));
+/** Server options (from /api/health): is the screen protected by ADMIN_TOKEN, is the signature verified. */
+const server = ref<{ admin_protected: boolean; verify_signature: boolean }>({ admin_protected: true, verify_signature: false });
+/** Opened from OneStock with a valid signature: the admin password is not needed for this site. */
+const viaOnestock = computed(() => !!props.signedSite && props.signedSite === cred.value.site_id);
+const authorized = computed(() => !server.value.admin_protected || !!adminToken.value || viaOnestock.value);
+const canSubmit = computed(() => authorized.value && !!cred.value.site_id && !!cred.value.environment && !!cred.value.user_id && (!!cred.value.password || !!existing.value));
 
 watch(adminToken, (v) => {
   try {
@@ -48,12 +53,12 @@ watch(adminToken, (v) => {
 });
 
 function describe(e: unknown): string {
-  if (e instanceof ApiError) return e.message;
+  if (e instanceof ApiError) return e.code === 'server_misconfigured' ? `${e.message}. ${t('hint_server_misconfigured')}` : e.message;
   return e instanceof Error ? e.message : String(e);
 }
 
 async function loadList() {
-  if (!adminToken.value) return;
+  if (!authorized.value) return;
   busy.value = 'list';
   listError.value = '';
   try {
@@ -132,7 +137,15 @@ async function remove(c: CredentialSummary) {
   }
 }
 
-onMounted(loadList);
+onMounted(async () => {
+  try {
+    const h = await api.health();
+    server.value = { admin_protected: h.admin_protected !== false, verify_signature: h.verify_signature === true };
+  } catch {
+    /* keep the protective defaults */
+  }
+  await loadList();
+});
 </script>
 
 <template>
@@ -148,7 +161,10 @@ onMounted(loadList);
         </div>
 
         <div class="body">
+          <OsAlert v-if="!server.admin_protected" type="warning" :subtitle="t('cfgOpenWarning')" />
+          <OsAlert v-else-if="viaOnestock" type="success" :subtitle="t('cfgViaOnestock')" />
           <OsInputText
+            v-else
             v-model="adminToken"
             type="password"
             class="field"
@@ -157,7 +173,7 @@ onMounted(loadList);
             @blur="loadList"
           />
 
-          <OsDivider />
+          <OsDivider v-if="server.admin_protected" />
 
           <div class="grid">
             <OsInputText v-model="cred.site_id" :label="t('siteId')" placeholder="c00" @blur="loadList" />
@@ -172,6 +188,7 @@ onMounted(loadList);
             />
             <OsInputText v-model="cred.api_url" class="wide" :label="t('cfgApiUrl')" placeholder="https://c00.api.qualif.onestock-retail.com" :supporting-text="t('cfgApiUrlHint')" />
             <OsInputText
+              v-if="server.verify_signature"
               v-model="cred.secret"
               type="password"
               class="wide"
@@ -192,7 +209,7 @@ onMounted(loadList);
       </div>
     </OsCardLayout>
 
-    <OsCardLayout v-if="adminToken">
+    <OsCardLayout v-if="authorized">
       <div class="block">
         <span class="os-label-l">{{ t('cfgConfigured') }}<template v-if="cred.site_id"> – {{ cred.site_id }}</template></span>
         <OsAlert v-if="listError" type="danger" :subtitle="listError" />
@@ -207,7 +224,9 @@ onMounted(loadList);
           :tertiary-text="[c.api_url ?? t('cfgApiUrlAuto'), c.updated_at].join(' · ')"
         >
           <template #end>
-            <OsBadge :text="c.has_extension_secrets ? t('cfgSigned') : t('cfgUnsigned')" :color="c.has_extension_secrets ? 'green' : 'orange'" />
+            <OsBadge
+              v-if="server.verify_signature"
+              :text="c.has_extension_secrets ? t('cfgSigned') : t('cfgUnsigned')" :color="c.has_extension_secrets ? 'green' : 'orange'" />
             <OsButton type="tertiary" color="neutral" icon="edit" :aria-label="t('cfgEdit')" @click="edit(c)" />
             <OsButton type="tertiary" color="red" icon="trash" :aria-label="t('remove')" @click="remove(c)" />
           </template>

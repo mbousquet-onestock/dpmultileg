@@ -32,7 +32,12 @@ export const config = {
   jwtTtlSeconds: Number(process.env.JWT_TTL_SECONDS ?? 3600),
   /** Bearer token protecting the /api/admin routes (credentials management). Disabled when empty. */
   adminToken: process.env.ADMIN_TOKEN ?? '',
-  /** Accept sessions without a valid OneStock extension signature (local development only). */
+  /**
+   * Verify the OneStock extension signature when opening a session (needs the extension secret per site/env).
+   * Disabled by default: the session is then opened from the site / environment sent by OneStock.
+   */
+  verifySignature: bool(process.env.VERIFY_SIGNATURE, false),
+  /** When the signature is verified: still accept sessions for sites without stored secret (local development). */
   allowUnsigned: bool(process.env.ALLOW_UNSIGNED, !isProd),
   /** Serve fake OneStock data instead of calling the real API (demo / local development). */
   mockOnestock: bool(process.env.MOCK_ONESTOCK, false),

@@ -18,7 +18,7 @@ import {
   type CredentialInput,
 } from './credentials.js';
 import { cached, callOnestock, clearSiteCaches, OnestockError, testLogin } from './onestock.js';
-import { issueSession, requireSession, type SessionClaims } from './session.js';
+import { issueSession, readSession, requireSession, type SessionClaims } from './session.js';
 import { verifyExtensionSignature } from './signature.js';
 
 type Handler = (req: Request, res: Response) => Promise<unknown>;
@@ -50,6 +50,8 @@ export function apiRouter(): Router {
       storage,
       mock: config.mockOnestock,
       allow_unsigned: config.allowUnsigned,
+      verify_signature: config.verifySignature,
+      admin_protected: !!config.adminToken,
       runtime: {
         node: process.version,
         vercel: config.onVercel,
@@ -100,12 +102,14 @@ export function apiRouter(): Router {
         });
       }
 
-      const signed = verifyExtensionSignature(
+      const signed =
+        config.verifySignature &&
+        verifyExtensionSignature(
         { extension_signature: str(body.extension_signature), extension_id: str(body.extension_id), user_id: userId },
         cred.extension_secrets,
         config.signatureMaxAgeSeconds,
       );
-      if (!signed && !(config.allowUnsigned && cred.extension_secrets.length === 0)) {
+      if (config.verifySignature && !signed && !(config.allowUnsigned && cred.extension_secrets.length === 0)) {
         const reason = !str(body.extension_signature)
           ? 'no extension_signature received in onestock_data'
           : cred.extension_secrets.length === 0
@@ -134,6 +138,7 @@ export function apiRouter(): Router {
         api_url: resolvedApiUrl,
         extension_id: str(body.extension_id),
         lang: str(body.lang),
+        signed,
       });
       return res.json({ ...session, site_id: siteId, environment: cred.environment, signed, mock: config.mockOnestock });
     }),
@@ -141,7 +146,7 @@ export function apiRouter(): Router {
 
   /** Standalone mode (outside the OneStock iframe, dev only): list environments configured for a site. */
   r.get('/standalone/environments', async (req, res) => {
-    if (!config.allowUnsigned) return res.status(403).json({ error: 'forbidden' });
+    if (config.verifySignature && !config.allowUnsigned) return res.status(403).json({ error: 'forbidden' });
     const siteId = str(req.query.site_id);
     const environments = (await listCredentials(siteId)).map((c) => ({ site_id: c.site_id, environment: c.environment, label: c.label }));
     if (config.mockOnestock && !environments.some((e) => e.environment === 'demo'))
@@ -241,18 +246,41 @@ export function apiRouter(): Router {
   /* ---------------------------------------------------------------- admin: credentials */
 
   const admin = Router();
-  admin.use((req, res, next) => {
-    if (!config.adminToken) return res.status(404).json({ error: 'admin_disabled', message: 'Set the ADMIN_TOKEN environment variable to enable the configuration screen' });
-    const given = Buffer.from(req.header('authorization') ?? '');
+  /**
+   * Who may manage credentials:
+   *  - anyone presenting the ADMIN_TOKEN (first setup, standalone use), for every site;
+   *  - a back office user who opened the extension from OneStock with a valid signature, for his own site only
+   *    (OneStock authenticated him and the extension anchor is restricted to the configured roles).
+   */
+  admin.use(async (req, res, next) => {
+    // No ADMIN_TOKEN configured: the configuration screen is open (deployment owner's choice, see README).
+    if (!config.adminToken) return next();
+    const header = req.header('authorization') ?? '';
+    const given = Buffer.from(header);
     const expected = Buffer.from(`Bearer ${config.adminToken}`);
-    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
-      log('warn', 'admin_unauthorized', { request_id: req.requestId, path: req.path });
-      return res.status(401).json({ error: 'unauthorized', message: 'Invalid admin token' });
+    if (given.length === expected.length && timingSafeEqual(given, expected)) return next();
+    if (header.startsWith('Bearer ')) {
+      try {
+        const s = await readSession(header.slice(7));
+        if (s.signed) {
+          const site = str((req.params as Record<string, string>).site_id) ?? str(req.body?.site_id) ?? str(req.query.site_id);
+          const urlSite = req.path.match(/^\/credentials\/([^/]+)\//)?.[1];
+          const targetSite = urlSite ? decodeURIComponent(urlSite) : site;
+          if (!targetSite || targetSite === s.site_id) {
+            res.locals.adminSite = s.site_id;
+            return next();
+          }
+          return res.status(403).json({ error: 'forbidden', message: `This OneStock session can only configure site ${s.site_id}` });
+        }
+      } catch {
+        /* not a session token */
+      }
     }
-    next();
+    log('warn', 'admin_unauthorized', { request_id: req.requestId, path: req.path });
+    return res.status(401).json({ error: 'unauthorized', message: 'Invalid admin password' });
   });
   admin.get('/credentials', async (req, res) => {
-    res.json({ credentials: await listCredentials(str(req.query.site_id)) });
+    res.json({ credentials: await listCredentials((res.locals.adminSite as string | undefined) ?? str(req.query.site_id)) });
   });
   admin.put('/credentials/:site_id/:environment', async (req, res) => {
     const { site_id, environment } = req.params as { site_id: string; environment: string };

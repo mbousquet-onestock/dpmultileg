@@ -144,6 +144,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
       :site-id="configDefaults.siteId"
       :environment="configDefaults.environment"
       :handshake-api-url="handshakeApiUrl"
+      :signed-site="session?.signed ? session.site_id : undefined"
       @saved="onConfigSaved"
     />
 
