@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsTag } from '@onestock-public/design-system';
+import { OsAlert, OsBadge, OsCardLayout, OsDivider, OsTag } from '@onestock-public/design-system';
 import { formatHours } from '@shared/logistics';
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { formatDate, formatMoney, t } from '../i18n';
 import { currency, destination, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
 import SchemaChain from './SchemaChain.vue';
 
-const showRaw = ref(false);
 
 const data = computed(() => selectedSchemas.value);
 const option = computed(() => data.value?.entry.option);
@@ -86,14 +85,6 @@ const zoneName = (id: string) => zoneCtx.value.zones.get(id)?.name ?? id;
           </div>
       </section>
 
-      <OsDivider />
-
-      <OsCollapse v-model="showRaw">
-        <template #header><span class="os-label-l">{{ t('rawExchange') }}</span></template>
-        <template #content>
-          <pre class="raw">{{ JSON.stringify(state.exchange, null, 2) }}</pre>
-        </template>
-      </OsCollapse>
     </div>
   </OsCardLayout>
 </template>
@@ -118,5 +109,4 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .theo { border: 1px dashed var(--os-border); border-radius: 5px; padding: 8px 10px; }
 .theo.used { border: 1px solid var(--os-green-1000); background: var(--os-green-t-100); --chain-bg: #ecf5ec; }
 .theo-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
-.raw { margin: 0; max-height: 420px; overflow: auto; background: var(--os-neutral-30); border: 1px solid var(--os-border); border-radius: 5px; padding: 12px; font-size: 12px; }
 </style>
