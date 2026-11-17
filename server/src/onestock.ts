@@ -122,6 +122,19 @@ export function cached<T>(t: Target, name: string, loader: () => Promise<T>): Pr
   return value;
 }
 
+/** Forget tokens and cached referential of a site/environment (after its credentials changed). */
+export function clearSiteCaches(siteId: string, environment: string): void {
+  const prefix = `${siteId}|${environment}|`;
+  for (const k of [...tokens.keys()]) if (k.startsWith(prefix)) tokens.delete(k);
+  for (const k of [...refCache.keys()]) if (k.startsWith(prefix)) refCache.delete(k);
+}
+
+/** Try a POST /login with the given credentials (configuration screen). Never caches the token. */
+export async function testLogin(apiUrl: string, siteId: string, userId: string, password: string): Promise<void> {
+  const res = (await rawCall(apiUrl, 'POST', '/login', { site_id: siteId, user_id: userId, password })) as { token?: string };
+  if (!res?.token) throw new OnestockError(502, res, 'OneStock /login returned no token', '/login');
+}
+
 export function clearCaches(): void {
   tokens.clear();
   refCache.clear();

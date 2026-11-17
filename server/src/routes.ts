@@ -1,4 +1,5 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { timingSafeEqual } from 'node:crypto';
 import { asList } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRoute, Endpoint, Item, SalesChannel, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
@@ -6,6 +7,9 @@ import { getStore } from './db.js';
 import { errorFields, log } from './logger.js';
 import {
   deleteCredential,
+  environmentFromApiUrl,
+  getCredential,
+  isAllowedApiUrl,
   listCredentials,
   resolveApiUrl,
   resolveCredential,
@@ -13,7 +17,7 @@ import {
   validateInput,
   type CredentialInput,
 } from './credentials.js';
-import { cached, callOnestock, OnestockError } from './onestock.js';
+import { cached, callOnestock, clearSiteCaches, OnestockError, testLogin } from './onestock.js';
 import { issueSession, requireSession, type SessionClaims } from './session.js';
 import { verifyExtensionSignature } from './signature.js';
 
@@ -91,6 +95,7 @@ export function apiRouter(): Router {
           message: `No credentials stored for site ${siteId} matching ${apiUrl ?? 'no api_url'} (configured environments for this site: ${known.join(', ') || 'none'})`,
           site_id: siteId,
           api_url: apiUrl ?? null,
+          environment_guess: apiUrl ? (environmentFromApiUrl(apiUrl) ?? null) : null,
           known_environments: known,
         });
       }
@@ -237,22 +242,73 @@ export function apiRouter(): Router {
 
   const admin = Router();
   admin.use((req, res, next) => {
-    if (!config.adminToken) return res.status(404).json({ error: 'admin_disabled' });
-    if (req.header('authorization') !== `Bearer ${config.adminToken}`) return res.status(401).json({ error: 'unauthorized' });
+    if (!config.adminToken) return res.status(404).json({ error: 'admin_disabled', message: 'Set the ADMIN_TOKEN environment variable to enable the configuration screen' });
+    const given = Buffer.from(req.header('authorization') ?? '');
+    const expected = Buffer.from(`Bearer ${config.adminToken}`);
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+      log('warn', 'admin_unauthorized', { request_id: req.requestId, path: req.path });
+      return res.status(401).json({ error: 'unauthorized', message: 'Invalid admin token' });
+    }
     next();
   });
   admin.get('/credentials', async (req, res) => {
     res.json({ credentials: await listCredentials(str(req.query.site_id)) });
   });
   admin.put('/credentials/:site_id/:environment', async (req, res) => {
-    const input: CredentialInput = { ...req.body, site_id: req.params.site_id, environment: req.params.environment };
+    const { site_id, environment } = req.params as { site_id: string; environment: string };
+    const existing = await getCredential(site_id, environment);
+    const input: CredentialInput = {
+      site_id,
+      environment,
+      user_id: str(req.body?.user_id) ?? existing?.user_id ?? '',
+      // Empty password = keep the stored one (it is never sent back to the browser).
+      password: (typeof req.body?.password === 'string' && req.body.password) || existing?.password || '',
+      api_url: str(req.body?.api_url) ?? null,
+      extension_secrets: Array.isArray(req.body?.extension_secrets) ? (req.body.extension_secrets as string[]).map((x) => String(x).trim()).filter(Boolean) : null,
+      label: str(req.body?.label) ?? null,
+    };
     const err = validateInput(input);
-    if (err) return res.status(400).json({ error: err });
+    if (err) return res.status(400).json({ error: 'invalid_input', message: err });
     await upsertCredential(input);
-    res.json({ ok: true, credentials: (await listCredentials(input.site_id)).find((c) => c.environment === input.environment) });
+    clearSiteCaches(site_id, environment);
+    log('info', 'credentials_saved', { request_id: req.requestId, site_id, environment, user_id: input.user_id, secrets_updated: !!input.extension_secrets?.length });
+    res.json({ ok: true, credentials: (await listCredentials(site_id)).find((c) => c.environment === environment) });
   });
   admin.delete('/credentials/:site_id/:environment', async (req, res) => {
-    res.status((await deleteCredential(req.params.site_id, req.params.environment)) ? 204 : 404).end();
+    const { site_id, environment } = req.params as { site_id: string; environment: string };
+    const deleted = await deleteCredential(site_id, environment);
+    clearSiteCaches(site_id, environment);
+    if (deleted) log('info', 'credentials_deleted', { request_id: req.requestId, site_id, environment });
+    res.status(deleted ? 204 : 404).end();
+  });
+  /** Check a user/password against OneStock POST /login without saving anything. */
+  admin.post('/credentials/test', async (req, res) => {
+    const b = req.body ?? {};
+    const siteId = str(b.site_id);
+    const environment = str(b.environment);
+    if (!siteId || !environment) return res.status(400).json({ error: 'invalid_input', message: 'site_id and environment are required' });
+    const existing = await getCredential(siteId, environment);
+    const userId = str(b.user_id) ?? existing?.user_id;
+    const password = (typeof b.password === 'string' && b.password) || existing?.password;
+    if (!userId || !password) return res.status(400).json({ error: 'invalid_input', message: 'user_id and password are required' });
+    const explicit = str(b.api_url);
+    if (explicit && !isAllowedApiUrl(explicit)) return res.status(400).json({ error: 'invalid_input', message: `api_url host must match ${config.allowedApiHost}` });
+    const apiUrl =
+      explicit ??
+      resolveApiUrl(
+        { site_id: siteId, environment, api_url: existing?.api_url ?? null, user_id: userId, password, extension_secrets: [], label: null },
+        str(b.handshake_api_url),
+      );
+    if (!apiUrl) return res.status(400).json({ error: 'missing_api_url', message: 'api_url is required for this environment' });
+    try {
+      await testLogin(apiUrl, siteId, userId, password);
+      log('info', 'credentials_test_ok', { request_id: req.requestId, site_id: siteId, environment, api_host: new URL(apiUrl).host });
+      res.json({ ok: true, api_url: apiUrl });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      log('warn', 'credentials_test_failed', { request_id: req.requestId, site_id: siteId, environment, api_host: new URL(apiUrl).host, message });
+      res.json({ ok: false, api_url: apiUrl, message });
+    }
   });
   r.use('/admin', admin);
 

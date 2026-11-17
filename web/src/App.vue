@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { OsBadge, OsButton, OsIcon } from '@onestock-public/design-system';
+import { OsBadge, OsButton, OsIcon, OsSegmentedControls } from '@onestock-public/design-system';
 import { computed, onMounted, ref } from 'vue';
-import { api, type SessionInfo } from './api';
+import { api, ApiError, type SessionInfo } from './api';
+import ConfigPanel from './components/ConfigPanel.vue';
 import ItemsSection from './components/ItemsSection.vue';
 import OptionsSection from './components/OptionsSection.vue';
 import ResultsList from './components/ResultsList.vue';
@@ -21,6 +22,49 @@ const step = ref('');
 /** Calling context shown in the diagnostic (no secret: the signature is masked). */
 const context = ref<Record<string, unknown>>({ embedded: isEmbedded(), params });
 const session = ref<SessionInfo>();
+/** Last session request, replayed after the credentials have been configured. */
+let lastPayload: Record<string, unknown> | undefined;
+let handshakeApiUrl: string | undefined;
+
+/* Hidden "API configuration" tab, opened from the gear button or from an error. */
+const configVisible = ref(new URLSearchParams(location.search).get('config') === '1');
+const tab = ref<'simulation' | 'config'>(configVisible.value ? 'config' : 'simulation');
+const tabs = computed(() => [
+  { value: 'simulation', text: t('tabSimulation'), icon: 'route' },
+  { value: 'config', text: t('tabConfig'), icon: 'key' },
+]);
+function openConfig() {
+  configVisible.value = true;
+  tab.value = 'config';
+}
+function toggleConfig() {
+  if (configVisible.value && tab.value === 'config') {
+    configVisible.value = false;
+    tab.value = 'simulation';
+  } else openConfig();
+}
+function guessEnvironment(url?: string): string | undefined {
+  try {
+    const labels = new URL(url ?? '').hostname.split('.');
+    return labels.find((l) => ['qualif', 'training', 'preprod', 'staging', 'sandbox', 'demo', 'dev', 'prod'].includes(l));
+  } catch {
+    return undefined;
+  }
+}
+const configDefaults = computed(() => {
+  const details = error.value instanceof ApiError ? (error.value.details as Record<string, unknown> | undefined) : undefined;
+  return {
+    siteId: session.value?.site_id ?? (lastPayload?.site_id as string | undefined) ?? params.site_id,
+    environment:
+      session.value?.environment ?? (details?.environment as string | undefined) ?? (details?.environment_guess as string | undefined) ?? guessEnvironment(handshakeApiUrl),
+  };
+});
+async function onConfigSaved() {
+  if (phase.value !== 'ready' && lastPayload) {
+    tab.value = 'simulation';
+    await start(lastPayload);
+  }
+}
 const channelName = computed(() => {
   const s = salesChannels.value.find((c) => c.id === state.salesChannel);
   return s?.name ?? s?.id ?? '';
@@ -28,6 +72,7 @@ const channelName = computed(() => {
 
 
 async function start(payload: Record<string, unknown>) {
+  lastPayload = payload;
   phase.value = 'connecting';
   error.value = null;
   context.value = { ...context.value, session_request: { ...payload, extension_signature: payload.extension_signature ? '***' : undefined } };
@@ -50,6 +95,7 @@ onMounted(async () => {
     try {
       step.value = t('step_handshake');
       const data = await handshake(params);
+      handshakeApiUrl = data.api_url;
       context.value = {
         ...context.value,
         onestock_data: { ...data, extension_signature: data.extension_signature ? `${String(data.extension_signature).slice(0, 12)}…` : undefined },
@@ -81,22 +127,37 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
         <h1 class="os-title-l">{{ t('title') }}</h1>
         <p class="os-label-s os-text-secondary">{{ t('subtitle') }}</p>
       </div>
-      <div v-if="session" class="session">
-        <OsBadge :text="`${session.site_id} · ${session.environment}`" color="grey" icon="lan" />
-        <OsBadge v-if="session.mock" :text="t('mockMode')" color="orange" />
+      <div class="session">
+        <template v-if="session">
+          <OsBadge :text="`${session.site_id} · ${session.environment}`" color="grey" icon="lan" />
+          <OsBadge v-if="session.mock" :text="t('mockMode')" color="orange" />
+        </template>
+        <OsButton type="tertiary" color="neutral" icon="settings-outline" :aria-label="t('openConfig')" :title="t('openConfig')" class="gear" @click="toggleConfig" />
       </div>
     </header>
+
+    <OsSegmentedControls v-if="configVisible" v-model="tab" :tabs="tabs" class="tabs" />
+
+    <ConfigPanel
+      v-if="configVisible && tab === 'config'"
+      :site-id="configDefaults.siteId"
+      :environment="configDefaults.environment"
+      :handshake-api-url="handshakeApiUrl"
+      @saved="onConfigSaved"
+    />
+
+    <template v-else>
 
     <div v-if="phase === 'connecting'" class="center os-label-m os-text-secondary">
       <OsIcon icon="loader" rotation color="brand" /> {{ t('connecting') }}
     </div>
 
     <template v-else-if="phase === 'standalone'">
-      <ErrorPanel v-if="error" :key="String(error)" :error="error" :step="step" :context="context" class="mb" />
+      <ErrorPanel v-if="error" :key="String(error)" :error="error" :step="step" :context="context" class="mb" @configure="openConfig" />
       <StandaloneConnect @connect="start({ ...$event, user_id: 'standalone' })" />
     </template>
 
-    <ErrorPanel v-else-if="phase === 'error'" :error="error" :step="step" :context="context" />
+    <ErrorPanel v-else-if="phase === 'error'" :error="error" :step="step" :context="context" @configure="openConfig" />
 
     <div v-else class="layout">
       <div class="form">
@@ -118,7 +179,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
       <div class="output">
         <section>
           <h2 class="os-label-l section-title">{{ t('results') }}</h2>
-          <ErrorPanel v-if="state.error" :key="String(state.error)" :error="state.error" :step="t('step_test')" :context="context" class="mb" />
+          <ErrorPanel v-if="state.error" :key="String(state.error)" :error="state.error" :step="t('step_test')" :context="context" class="mb" @configure="openConfig" />
           <p v-if="!state.results" class="os-label-s os-text-secondary empty">{{ t('noResult') }}</p>
           <template v-else>
             <p class="os-body-s os-text-secondary hint">{{ t('resultsHint') }}</p>
@@ -128,6 +189,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
         <SchemaView />
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -136,7 +198,10 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 h1 { margin: 0 0 2px; color: var(--os-text-primary); }
 .page-head p { margin: 0; }
-.session { display: flex; gap: 6px; }
+.session { display: flex; gap: 6px; align-items: center; }
+.gear { opacity: 0.45; }
+.gear:hover { opacity: 1; }
+.tabs { margin-bottom: 16px; }
 .center { display: flex; align-items: center; gap: 8px; padding: 48px 0; justify-content: center; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; }
 @media (min-width: 1280px) { .layout { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; } .output { position: sticky; top: 12px; } }

@@ -36,6 +36,10 @@ Les GET OneStock avec corps sont envoyés en `POST` + `X-HTTP-Method-Override: G
 
 Table `credentials` / `dpm_credentials` : `site_id`, `environment`, `user_id`, `password` (chiffré AES-256-GCM), `api_url` (optionnelle), `extension_secrets` (secrets de signature, chiffrés), `label`.
 
+**Depuis l'interface (onglet caché « Configuration API »)** : cliquer sur l'engrenage discret en haut à droite, ou sur « Configurer les identifiants » dans une erreur d'identifiants ou de signature. On peut aussi ouvrir l'onglet directement avec `?config=1`. Il faut saisir le jeton d'administration (variable `ADMIN_TOKEN`), puis le site, l'environnement (tous deux pré-remplis d'après le contexte OneStock), l'utilisateur API, le mot de passe et, en option, l'URL d'API et le secret d'extension. « Tester la connexion » appelle `POST /login` sans rien enregistrer. « Enregistrer » chiffre et stocke les identifiants, vide le cache de tokens, puis relance la connexion. Laisser le mot de passe ou le secret vide conserve la valeur déjà enregistrée. Ces valeurs ne sont jamais renvoyées au navigateur.
+
+![Configuration](docs/configuration.png)
+
 En ligne de commande :
 
 ```bash

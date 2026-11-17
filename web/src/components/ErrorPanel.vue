@@ -6,6 +6,9 @@ import { api, ApiError } from '../api';
 import { t } from '../i18n';
 
 const props = defineProps<{ error: unknown; step?: string; context?: Record<string, unknown> }>();
+const emit = defineEmits<{ configure: [] }>();
+/** Errors fixed from the configuration tab. */
+const CONFIG_CODES = ['missing_credentials', 'invalid_signature', 'missing_api_url', 'onestock_error'];
 const open = ref(false);
 const health = ref<unknown>(null);
 const copied = ref(false);
@@ -71,6 +74,7 @@ async function copy() {
       </div>
     </template>
     <template #actions>
+      <OsButton v-if="apiErr && CONFIG_CODES.includes(apiErr.code)" type="secondary" icon="key" :text="t('configure')" @click="emit('configure')" />
       <OsButton type="tertiary" color="neutral" icon="copy" :text="copied ? t('copied') : t('copy')" @click="copy" />
     </template>
   </OsAlert>

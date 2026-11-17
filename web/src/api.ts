@@ -32,22 +32,26 @@ export class ApiError extends Error {
 let session: SessionInfo | undefined;
 let renew: (() => Promise<SessionInfo>) | undefined;
 
-async function request<T>(method: string, path: string, body?: unknown, retry = true): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, retry = true, adminToken?: string): Promise<T> {
   const url = `/api${path}`;
   let res: Response;
   try {
     res = await fetch(url, {
       method,
-      headers: { 'Content-Type': 'application/json', ...(session ? { Authorization: `Bearer ${session.token}` } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : session ? { Authorization: `Bearer ${session.token}` } : {}),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
     throw new ApiError(0, 'network_error', { message: `Backend unreachable: ${e instanceof Error ? e.message : String(e)}` }, { method, url });
   }
-  if (res.status === 401 && retry && renew && path !== '/session') {
+  if (res.status === 401 && retry && renew && path !== '/session' && !adminToken) {
     session = await renew();
     return request<T>(method, path, body, false);
   }
+  if (res.status === 204) return {} as T;
   const text = await res.text();
   let json: Record<string, unknown> | undefined;
   try {
@@ -72,6 +76,44 @@ async function request<T>(method: string, path: string, body?: unknown, retry = 
   }
   return json as T;
 }
+
+export interface CredentialSummary {
+  site_id: string;
+  environment: string;
+  api_url: string | null;
+  user_id: string;
+  has_extension_secrets: boolean;
+  label: string | null;
+  updated_at: string;
+}
+
+export interface CredentialForm {
+  site_id: string;
+  environment: string;
+  user_id: string;
+  password?: string;
+  api_url?: string;
+  extension_secrets?: string[];
+  label?: string;
+  handshake_api_url?: string;
+}
+
+/** Configuration screen: protected by the ADMIN_TOKEN of the server. */
+export const adminApi = {
+  list: (token: string, siteId?: string) =>
+    request<{ credentials: CredentialSummary[] }>('GET', `/admin/credentials${siteId ? `?site_id=${encodeURIComponent(siteId)}` : ''}`, undefined, false, token),
+  save: (token: string, f: CredentialForm) =>
+    request<{ ok: boolean; credentials: CredentialSummary }>(
+      'PUT',
+      `/admin/credentials/${encodeURIComponent(f.site_id)}/${encodeURIComponent(f.environment)}`,
+      { user_id: f.user_id, password: f.password, api_url: f.api_url, extension_secrets: f.extension_secrets, label: f.label },
+      false,
+      token,
+    ),
+  remove: (token: string, siteId: string, environment: string) =>
+    request<unknown>('DELETE', `/admin/credentials/${encodeURIComponent(siteId)}/${encodeURIComponent(environment)}`, undefined, false, token),
+  test: (token: string, f: CredentialForm) => request<{ ok: boolean; api_url?: string; message?: string }>('POST', '/admin/credentials/test', f, false, token),
+};
 
 export const api = {
   health: () => request<Record<string, unknown> & { ok: boolean; mock: boolean; allow_unsigned: boolean }>('GET', '/health'),

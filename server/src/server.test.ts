@@ -105,4 +105,27 @@ describe('API', () => {
     expect(option.delivery_routes.map((r: { id: string }) => r.id)).toEqual(['r_wh_hub_paris', 'r_hub_idf_sdd']);
     expect(res.body.request.fields).toContain('delivery_options.delivery_routes');
   });
+
+  it('keeps the stored password when it is not re-entered', async () => {
+    await request(app)
+      .put('/api/admin/credentials/c00/qualif')
+      .set('Authorization', 'Bearer admin')
+      .send({ user_id: 'other_user', password: '' })
+      .expect(200);
+    const cred = (await getCredential('c00', 'qualif'))!;
+    expect(cred.user_id).toBe('other_user');
+    expect(cred.password).toBe('Pa55-w0rd');
+    expect(cred.extension_secrets).toEqual([SECRET]);
+  });
+
+  it('protects the connection test and validates its input', async () => {
+    await request(app).post('/api/admin/credentials/test').send({ site_id: 'c00', environment: 'qualif' }).expect(401);
+    const bad = await request(app)
+      .post('/api/admin/credentials/test')
+      .set('Authorization', 'Bearer admin')
+      .send({ site_id: 'c00', environment: 'qualif', api_url: 'https://evil.example.com' })
+      .expect(400);
+    expect(bad.body.message).toContain('api_url');
+  });
 });
+
