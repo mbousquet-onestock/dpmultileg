@@ -130,6 +130,9 @@ export interface Item {
   image?: string;
   price?: number | string;
   features?: Record<string, Record<string, unknown[]>>;
+  category_ids?: string[];
+  /** Features of the item in the current language (used to evaluate restrictions and parcel constraints). */
+  attributes?: Record<string, unknown[]>;
 }
 
 export interface SalesChannel {

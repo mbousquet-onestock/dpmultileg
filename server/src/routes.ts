@@ -177,11 +177,20 @@ export function apiRouter(): Router {
           }
         }),
       ]);
-      // Stock locations explicitly referenced by zones, to draw the schema (origins / hubs / stores).
-      const endpointIds = [...new Set(zones.flatMap((z) => z.included_endpoint_ids ?? []))];
-      const endpoints = endpointIds.length
-        ? await cached(t, `endpoints:${endpointIds.join(',')}`, async () => fetchEndpoints(t, { endpoint_ids: endpointIds }))
-        : [];
+      // All stock locations: zones may be geographic (countries, zip codes) and the local delivery promise
+      // needs every candidate origin. Paginated, capped to keep the referential reasonable.
+      const endpoints = await cached(t, 'endpoints:all', async () => {
+        const all: Endpoint[] = [];
+        for (let start = 0; start < 3000; start += 100) {
+          const page = await fetchEndpoints(t, {}, start);
+          all.push(...page);
+          if (page.length < 100) break;
+        }
+        // Endpoints referenced by zones but not returned (other pagination, filters...)
+        const missing = [...new Set(zones.flatMap((z) => z.included_endpoint_ids ?? []))].filter((id) => !all.some((e) => e.id === id));
+        if (missing.length) all.push(...(await fetchEndpoints(t, { endpoint_ids: missing.slice(0, 100) }, 0)));
+        return all;
+      });
       // Optional referential explaining the choices (internal routes: tolerate missing rights / versions).
       const optional = async <T extends { id: string }>(name: string, path: string, key: string): Promise<T[]> =>
         cached(t, name, async () => {
@@ -227,7 +236,8 @@ export function apiRouter(): Router {
       const pattern = str(req.body?.pattern);
       const ids = Array.isArray(req.body?.ids) ? (req.body.ids as string[]).slice(0, 100) : undefined;
       const payload: Record<string, unknown> = {
-        features: ['name', 'image', 'image_url', 'price', 'color', 'size'],
+        // Weight / dimensions / flags are needed to evaluate carrier restrictions and parcel constraints.
+        features: ['name', 'image', 'image_url', 'price', 'color', 'size', 'weight', 'W', 'length', 'width', 'height', 'd1', 'd2', 'd3', 'volume', 'bulky', 'hazardous', 'category'],
         lang,
         get_total: true,
         pagination: { start: Number(req.body?.start ?? 0), limit: Math.min(Number(req.body?.limit ?? 20), 50) },
@@ -274,7 +284,7 @@ export function apiRouter(): Router {
     wrap(async (req, res) => {
       const t = target(req.session!);
       const itemIds = Array.isArray(req.body?.item_ids) ? (req.body.item_ids as unknown[]).map(String).slice(0, 50) : [];
-      const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 200) : [];
+      const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 500) : [];
       if (!itemIds.length || !endpointIds.length) return res.json({ stocks: [] });
       const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
       res.json({ stocks: collectStockLines(result) });
@@ -403,11 +413,11 @@ export function apiRouter(): Router {
   return r;
 }
 
-async function fetchEndpoints(t: { site_id: string; environment: string; api_url: string }, filter: Record<string, unknown>): Promise<Endpoint[]> {
+async function fetchEndpoints(t: { site_id: string; environment: string; api_url: string }, filter: Record<string, unknown>, start = 0): Promise<Endpoint[]> {
   const res = await callOnestock(t, 'GET', '/endpoints', {
     ...filter,
     fields: ['_id', 'name', 'classification', 'timezone', 'address', 'address.zip_code', 'address.city', 'address.regions'],
-    pagination: { start: 0, limit: 100 },
+    pagination: { start, limit: 100 },
   });
   return asList<Endpoint>(res, 'endpoints');
 }
@@ -421,6 +431,8 @@ function simplifyItem(i: Item, lang: string): Item {
     name: first('name') ?? i.name,
     image: first('image_url') ?? first('image') ?? i.image,
     price: first('price') ?? i.price,
+    category_ids: i.category_ids,
+    attributes: f as Record<string, unknown[]>,
   };
 }
 

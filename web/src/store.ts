@@ -1,5 +1,6 @@
-import { buildSchemas, deliveryMethods, shipmentsFromPromise, type ZoneContext } from '@shared/logistics';
-import type { DeliveryConfig, Destination, Endpoint, Item, PromiseOption } from '@shared/types';
+import { deliveryMethods, type StockLine, type ZoneContext } from '@shared/logistics';
+import { candidateEndpoints, computePromise, type LocalPromiseOption } from '@shared/promise';
+import type { DeliveryConfig, Destination, Endpoint, Item } from '@shared/types';
 import { computed, reactive } from 'vue';
 import { api, type Referential } from './api';
 import { lang } from './i18n';
@@ -7,7 +8,7 @@ import { lang } from './i18n';
 export type DestinationType = 'address' | 'zone' | 'endpoint';
 
 export interface ResultEntry {
-  option: PromiseOption;
+  option: LocalPromiseOption;
   config?: DeliveryConfig;
 }
 
@@ -26,7 +27,6 @@ export const state = reactive({
   running: false,
   error: null as unknown,
   results: null as ResultEntry[] | null,
-  exchange: null as { request: unknown; response: unknown } | null,
   selected: -1,
 });
 
@@ -83,47 +83,53 @@ export async function loadEndpoints(query = '') {
   state.extraEndpoints = [...state.extraEndpoints.filter((e) => !found.some((f) => f.id === e.id)), ...found];
 }
 
-/** Same request as the test, for one delivery method, with OneStock debug details (sort order, restrictions...). */
-export async function runDebug(deliveryMethod: string): Promise<unknown> {
-  if (!destination.value) return null;
-  const body: Record<string, unknown> = {
-    sales_channel: state.salesChannel,
-    line_items: state.lines.map((l) => ({ item_id: l.item.id, qty: l.qty })),
-    delivery_options: [{ delivery_method: deliveryMethod, destination: destination.value }],
-    debug: true,
-  };
-  if (state.price.enabled && state.price.value !== undefined) body.price = state.price.value;
-  if (state.date.enabled && state.date.value) body.from = Math.floor(new Date(state.date.value).getTime() / 1000);
-  return (await api.deliveryPromises(body)).response;
-}
-
 export async function runTest() {
-  if (!canRun.value || !destination.value) return;
+  if (!canRun.value || !destination.value || !state.referential) return;
   state.running = true;
   state.error = null;
   state.selected = -1;
   try {
+    const ref = state.referential;
+    const dest = destination.value;
     const methods = state.methods.enabled && state.methods.values.length ? state.methods.values : channelMethods.value.map((c) => c.delivery_method);
-    const body: Record<string, unknown> = {
-      sales_channel: state.salesChannel,
-      line_items: state.lines.map((l) => ({ item_id: l.item.id, qty: l.qty })),
+    const lines = state.lines.map((l) => ({ item_id: l.item.id, qty: l.qty }));
+    const from = state.date.enabled && state.date.value ? Math.floor(new Date(state.date.value).getTime() / 1000) : Math.floor(Date.now() / 1000);
+    const common = {
+      salesChannel: state.salesChannel,
+      destination: dest,
+      methods,
+      configs: ref.delivery_configs,
+      routes: ref.delivery_routes,
+      ctx: zoneCtx.value,
+      sortOrders: ref.sort_orders ?? [],
+      restrictions: ref.delivery_restrictions ?? [],
     };
-    if (state.price.enabled && state.price.value !== undefined) body.price = state.price.value;
-    if (state.date.enabled && state.date.value) body.from = Math.floor(new Date(state.date.value).getTime() / 1000);
 
-    // OneStock recommends at most 10 delivery options per call.
-    const chunks: string[][] = [];
-    for (let i = 0; i < methods.length; i += 10) chunks.push(methods.slice(i, i + 10));
-    const responses = await Promise.all(
-      chunks.map((chunk) => api.deliveryPromises({ ...body, delivery_options: chunk.map((m) => ({ delivery_method: m, destination: destination.value })) })),
-    );
-    const options = responses.flatMap((r) => r.response?.delivery_options ?? []);
-    const configs = state.referential?.delivery_configs ?? [];
-    state.results = options.map((option) => ({
-      option: { ...option, destination: option.destination ?? destination.value ?? undefined },
-      config: deliveryMethods(configs, state.salesChannel).find((c) => c.delivery_method === option.delivery_method),
-    }));
-    state.exchange = responses.length === 1 ? responses[0] : { request: responses.map((r) => r.request), response: responses.map((r) => r.response) };
+    // Stock of every stock location that may serve the order (GET /stocks, by chunks).
+    const eps = candidateEndpoints(common);
+    let stock: StockLine[] | null = [];
+    try {
+      for (let i = 0; i < eps.length; i += 400) {
+        const res = await api.stocks(
+          lines.map((l) => l.item_id),
+          eps.slice(i, i + 400),
+        );
+        stock.push(...res.stocks);
+      }
+    } catch (e) {
+      console.warn('[dpmultileg] stock unavailable, availability not verified', e);
+      stock = null;
+    }
+
+    const options = computePromise({
+      ...common,
+      lines,
+      from,
+      items: new Map(state.lines.map((l) => [l.item.id, l.item])),
+      stock,
+      price: state.price.enabled ? state.price.value : undefined,
+    });
+    state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
     state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;
   } catch (e) {
@@ -134,18 +140,11 @@ export async function runTest() {
   }
 }
 
-
-/** Schema(s) for the selected result: actual routes when returned by the API, theoretical ones from the configuration. */
+/** Selected delivery option, computed locally. */
 export const selectedSchemas = computed(() => {
   const entry = state.results?.[state.selected];
   if (!entry || !state.referential) return null;
-  const routes = state.referential.delivery_routes;
-  const dest = entry.option.destination ?? destination.value ?? {};
-  return {
-    entry,
-    shipments: shipmentsFromPromise(entry.option, routes, zoneCtx.value),
-    theoretical: buildSchemas(entry.config, dest, routes, zoneCtx.value, { maxLegs: 3, limit: 12 }),
-  };
+  return { entry, analysis: entry.option.analysis };
 });
 
 export function itemLabel(id: string): string {

@@ -74,11 +74,11 @@ export const mockRoutes: DeliveryRoute[] = [
   r('r_wh_fr_colissimo', 'colissimo', 'home', 'z_wh_tls', 'z_fr', 24, 72, { metric_values: { cost_by_parcel: 6.5 } }),
   r('r_wh_eu_dhl', 'dhl', 'express', 'z_wh_tls', 'z_eu', 48, 96, { metric_values: { cost_by_parcel: 14 } }),
   r('r_wh_hub_paris', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_paris', 12, 24, { metric_values: { cost_by_parcel: 1.2 } }),
-  r('r_hub_idf_sdd', 'stuart', 'same_day', 'z_hub_paris', 'z_idf', 2, 6, { metric_values: { cost_by_parcel: 9 } }),
+  r('r_hub_idf_sdd', 'stuart', 'same_day', 'z_hub_paris', 'z_idf', 2, 6, { metric_values: { cost_by_parcel: 9 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
   r('r_wh_hub_mrs', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_mrs', 8, 16, { metric_values: { cost_by_parcel: 1 } }),
   r('r_hub_corse_ferry', 'corsica_ferries', 'fret', 'z_hub_mrs', 'z_corse', 24, 48, { metric_values: { cost_by_parcel: 7.5 } }),
   r('r_wh_stores_shuttle', 'store_shuttle', 'navette', 'z_wh_tls', 'z_stores_fr', 24, 48, { metric_values: { cost_by_parcel: 0.8 } }),
-  r('r_stores_idf_sdd', 'stuart', 'same_day', 'z_stores_idf', 'z_idf', 1, 3, { metric_values: { cost_by_parcel: 8 } }),
+  r('r_stores_idf_sdd', 'stuart', 'same_day', 'z_stores_idf', 'z_idf', 1, 3, { metric_values: { cost_by_parcel: 8 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
   r('r_stores_fr_colissimo', 'colissimo', 'home', 'z_stores_fr', 'z_fr', 24, 48, { metric_values: { cost_by_parcel: 6.9 } }),
   r('r_stores_stores', 'store_shuttle', 'interstore', 'z_stores_fr', 'z_stores_fr', 24, 48, { metric_values: { cost_by_parcel: 1.5 } }),
 ];
@@ -106,6 +106,8 @@ export const mockConfigs: DeliveryConfig[] = [
     delivery_zone_ids: ['z_idf'],
     authorized_shipment_number: 1,
     sort_order: { sort_criterias: [{ field: 'eta_end', desc: false }] },
+    operations: { shipment: ['picking'] },
+    global_execution_times: { picking: '1h' },
   },
   {
     id: 'cfg_ckc',
@@ -165,11 +167,10 @@ export const mockSalesChannels: SalesChannel[] = [
   { id: 'sc_order_in_store', name: 'SC Order In Store', currency: 'EUR', timezone: 'Europe/Paris' },
 ];
 
-const item = (id: string, name: string, price: number, color: string): Item => ({
-  id,
-  product_id: id.split('_').slice(0, 2).join('_'),
-  features: { fr: { name: [name], price: [String(price)], color: [color] }, en: { name: [name], price: [String(price)], color: [color] } },
-});
+const item = (id: string, name: string, price: number, color: string, weight = 1, bulky = false): Item => {
+  const f = { name: [name], price: [String(price)], color: [color], weight: [weight], bulky: [bulky] };
+  return { id, product_id: id.split('_').slice(0, 2).join('_'), category_ids: [bulky ? 'home>furniture' : 'fashion'], features: { fr: f, en: f } };
+};
 
 export const mockItems: Item[] = [
   item('TSHIRT_BASIC_WH_M', 'T-shirt basique blanc', 19.9, 'Blanc'),
@@ -177,11 +178,11 @@ export const mockItems: Item[] = [
   item('JEAN_SLIM_IND_32', 'Jean slim indigo', 69, 'Indigo'),
   item('SNEAKER_RUN_WH_42', 'Sneakers running blanches', 99, 'Blanc'),
   item('SNEAKER_RUN_BK_43', 'Sneakers running noires', 99, 'Noir'),
-  item('PARKA_WINTER_KK_M', 'Parka hiver kaki', 189, 'Kaki'),
+  item('PARKA_WINTER_KK_M', 'Parka hiver kaki', 189, 'Kaki', 2),
   item('BAG_LEATHER_BR', 'Sac cuir marron', 149, 'Marron'),
   item('SCARF_WOOL_RD', 'Écharpe laine rouge', 39, 'Rouge'),
   item('WATCH_STEEL_SV', 'Montre acier', 249, 'Argent'),
-  item('SOFA_3P_GR', 'Canapé 3 places (hors gabarit)', 899, 'Gris'),
+  item('SOFA_3P_GR', 'Canapé 3 places (hors gabarit)', 899, 'Gris', 65, true),
 ];
 
 /** Stock per endpoint (absent = 0). */
@@ -339,7 +340,8 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
       const name = String(body.name ?? '').toLowerCase();
       let list = ids?.length ? mockEndpoints.filter((e) => ids.includes(e.id)) : mockEndpoints;
       if (name) list = list.filter((e) => `${e.id} ${e.name}`.toLowerCase().includes(name));
-      return { endpoints: list };
+      const start = ((body.pagination as { start?: number } | undefined)?.start ?? 0) as number;
+      return { endpoints: list.slice(start, start + 100) };
     }
     case '/stocks': {
       const items = (body.item_ids as string[] | undefined) ?? [];

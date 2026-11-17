@@ -4,8 +4,14 @@ Une extension UI OneStock (`bo.page`) qui permet de :
 
 1. **sélectionner des articles** (`GET /items`) et leurs quantités,
 2. **choisir un canal de vente et une destination** (adresse, zone ou lieu de stock), avec en option le prix de commande, les modes de livraison et une date de simulation (même écran que le testeur de promesse du back-office),
-3. **calculer les options de livraison possibles** (`GET /delivery_promises`, avec `fields: delivery_options.delivery_routes`),
-4. **voir les schémas logistiques possibles** d'une option sélectionnée : toutes les combinaisons de routes (`GET /delivery_routes`) compatibles avec la configuration du mode (`GET /delivery_configs` : transporteurs, zones de livraison) et la destination (`GET /zones`). Plusieurs routes peuvent s'enchaîner, par exemple entrepôt → hub (linehaul) → client (coursier jour même).
+3. **calculer les options de livraison** : la promesse est **reconstruite par l'extension**, sans appeler `GET /delivery_promises`, à partir de :
+   - `GET /delivery_configs` : la configuration du mode dont les zones de livraison contiennent la destination, ses transporteurs, ses opérations et temps d'exécution, ses priorités, son nombre maximal d'expéditions et ses restrictions appliquées ;
+   - `GET /delivery_routes` et `GET /zones` : les chaînes de routes possibles (multi-leg), avec leurs temps de transit et leurs coûts ;
+   - `GET /stocks` : le stock disponible (on hand) dans chaque lieu de stock d'origine ;
+   - `GET /delivery_restrictions` et les contraintes colis des routes, évaluées sur les caractéristiques des articles (catégories, poids, dimensions) ;
+4. **voir le schéma logistique** de chaque option : la ou les routes sélectionnées selon les priorités du mode (par exemple la plus rapide parmi celles qui ont le stock), et pour chaque autre schéma la raison pour laquelle il n'est pas retenu (pas de stock, restriction, contrainte colis, critère de priorité).
+
+**Algorithme** (`shared/promise.ts`) : pour chaque mode, l'extension prend la configuration correspondant à la destination, puis les schémas candidats. Elle exclut, par article, les schémas soumis à une restriction ou à une contrainte colis, puis vérifie le stock à l'origine. Les schémas restants sont classés selon les priorités : une seule expédition est privilégiée, puis la commande est éclatée dans la limite autorisée. La date estimée vaut l'heure de la demande (ou la date simulée), plus les opérations du mode, plus le transit. Les calendriers (enlèvement, ouverture, livraison) et les grilles de coûts ne sont pas évalués : c'est une estimation à partir de la configuration.
 
 ![Schéma](docs/screenshot.png)
 
