@@ -1,0 +1,102 @@
+/*
+ * Fallback styles reproducing the OneStock design system primitives & tokens
+ * (values taken from https://design-system.onestock-retail.com).
+ * Only loaded when @onestock-public/design-system is not installed (see vite.config.ts).
+ */
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+@import './icons.css';
+
+:root {
+  --os-neutral-1000: #000000;
+  --os-neutral-900: #191919;
+  --os-neutral-800: #333333;
+  --os-neutral-700: #4c4c4c;
+  --os-neutral-500: #7f7f7f;
+  --os-neutral-300: #b2b2b2;
+  --os-neutral-200: #cccccc;
+  --os-neutral-150: #d6d6d6;
+  --os-neutral-100: #e5e5e5;
+  --os-neutral-50: #f2f2f2;
+  --os-neutral-30: #f7f7f7;
+  --os-neutral-20: #fafafa;
+  --os-neutral-0: #ffffff;
+  --os-neutral-t-50: #0000000d;
+  --os-neutral-t-30: #00000008;
+  --os-primary-1000: #24bdb0;
+  --os-primary-800: #50cac0;
+  --os-primary-100: #e8f8f7;
+  --os-primary-t-100: #24bdb01a;
+  --os-red-1000: #f44539;
+  --os-red-t-100: #f445391a;
+  --os-blue-1000: #2695f3;
+  --os-blue-t-100: #2695f31a;
+  --os-orange-1000: #fd7e14;
+  --os-orange-t-100: #fd7e141a;
+  --os-purple-1000: #673ab7;
+  --os-purple-t-100: #673ab71a;
+  --os-green-1000: #43a047;
+  --os-green-t-100: #43a0471a;
+  --os-grey-1000: #263239;
+  --os-grey-700: #747c80;
+
+  --os-text-primary: var(--os-neutral-800);
+  --os-text-secondary: var(--os-neutral-500);
+  --os-text-placeholder: var(--os-neutral-300);
+  --os-text-brand: var(--os-primary-1000);
+  --os-border: var(--os-neutral-100);
+  --os-surface-page-background: var(--os-neutral-20);
+  --os-surface-white: var(--os-neutral-0);
+  --os-surface-hover: var(--os-neutral-30);
+
+  --os-radius-s: 3px;
+  --os-radius-m: 5px;
+  --os-radius-l: 7px;
+  --os-spacing-xs: 2px;
+  --os-spacing-s: 4px;
+  --os-spacing-m: 8px;
+  --os-spacing-l: 12px;
+  --os-spacing-xl: 16px;
+  --os-spacing-2xl: 24px;
+  --os-spacing-3xl: 32px;
+}
+
+/* Typography */
+.os-headline-m { font-family: Roboto, sans-serif; font-size: 3rem; font-weight: 500; }
+.os-headline-s { font-family: Roboto, sans-serif; font-size: 2.5rem; font-weight: 400; }
+.os-title-l { font-family: Roboto, sans-serif; font-size: 1.375rem; font-weight: 500; }
+.os-title-m { font-family: Roboto, sans-serif; font-size: 1.25rem; font-weight: 500; }
+.os-title-s { font-family: Roboto, sans-serif; font-size: 1.25rem; font-weight: 400; }
+.os-label-l { font-family: Roboto, sans-serif; font-size: 1rem; font-weight: 500; }
+.os-label-m { font-family: Roboto, sans-serif; font-size: 1rem; font-weight: 400; }
+.os-label-s { font-family: Roboto, sans-serif; font-size: 0.875rem; font-weight: 400; }
+.os-body-l { font-family: Roboto, sans-serif; font-size: 0.875rem; font-weight: 500; }
+.os-body-m { font-family: Roboto, sans-serif; font-size: 0.75rem; font-weight: 500; }
+.os-body-s { font-family: Roboto, sans-serif; font-size: 0.75rem; font-weight: 400; }
+.os-body-xs { font-family: Roboto, sans-serif; font-size: 0.5rem; font-weight: 400; }
+.os-text-secondary { color: var(--os-text-secondary); }
+.os-text-brand { color: var(--os-text-brand); }
+
+/* Spacing utilities */
+.os-gap-s { gap: 4px; } .os-gap-m { gap: 8px; } .os-gap-l { gap: 12px; } .os-gap-xl { gap: 16px; } .os-gap-2xl { gap: 24px; }
+.os-padding-m { padding: 8px; } .os-padding-l { padding: 12px; } .os-padding-xl { padding: 16px; } .os-padding-2xl { padding: 24px; }
+
+/* Shadows */
+.os-shadow-floating-container { box-shadow: 0 0 6px #00000026; }
+.os-shadow-floating-button { box-shadow: 0 3px 10px #00000026; }
+
+/* Icons */
+.os-icon { display: inline-block; flex: none; }
+.os-icon.os-icon-size-l { width: 32px; height: 32px; }
+.os-icon.os-icon-size-m { width: 24px; height: 24px; }
+.os-icon.os-icon-size-s { width: 18px; height: 18px; }
+.os-icon.os-icon-size-xs { width: 14px; height: 14px; }
+.os-icon-color-primary { color: var(--os-text-primary); }
+.os-icon-color-secondary { color: var(--os-text-secondary); }
+.os-icon-color-brand { color: var(--os-primary-1000); }
+.os-icon-color-red { color: var(--os-red-1000); }
+.os-icon-color-orange { color: var(--os-orange-1000); }
+.os-icon-color-blue { color: var(--os-blue-1000); }
+.os-icon-color-green { color: var(--os-green-1000); }
+.os-icon-color-purple { color: var(--os-purple-1000); }
+.os-icon-rotation { animation: os-spin 1s linear infinite; }
+@keyframes os-spin { to { transform: rotate(360deg); } }

@@ -1,0 +1,6 @@
+import '@onestock-public/design-system/dist/onestock-design-system.css';
+import { createApp } from 'vue';
+import App from './App.vue';
+import './app.css';
+
+createApp(App).mount('#app');

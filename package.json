@@ -1,0 +1,41 @@
+{
+  "name": "dpmultileg",
+  "private": true,
+  "version": "0.1.0",
+  "description": "OneStock UI extension - delivery promise simulator with multi-leg logistic schema",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch server/src/index.ts",
+    "dev:web": "vite",
+    "build": "npm run build:web && tsc -p server/tsconfig.json",
+    "start": "NODE_ENV=production node server/dist/server/src/index.js",
+    "test": "vitest run",
+    "typecheck": "vue-tsc --noEmit -p web/tsconfig.json && tsc --noEmit -p server/tsconfig.json",
+    "creds": "tsx server/src/cli.ts",
+    "build:web": "vue-tsc --noEmit -p web/tsconfig.json && vite build"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.1",
+    "express": "^5.3.0",
+    "jose": "^6.2.17"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/supertest": "^7.2.1",
+    "@vitejs/plugin-vue": "^6.0.11",
+    "concurrently": "^10.0.7",
+    "sass-embedded": "^1.108.2",
+    "supertest": "^7.3.2",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0",
+    "vue": "^3.5.45",
+    "vue-tsc": "^3.3.14"
+  }
+}

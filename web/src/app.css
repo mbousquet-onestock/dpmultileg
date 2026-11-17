@@ -1,0 +1,8 @@
+html, body { margin: 0; }
+body {
+  font-family: Roboto, sans-serif;
+  color: var(--os-text-primary, #333);
+  background: var(--os-surface-page-background, #fafafa);
+  -webkit-font-smoothing: antialiased;
+}
+*, *::before, *::after { box-sizing: border-box; }
