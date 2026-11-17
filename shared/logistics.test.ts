@@ -3,7 +3,9 @@ import { mockConfigs, mockEndpoints, mockRestrictions, mockRoutes, mockSortOrder
 import {
   buildSchemas,
   collectStockLines,
+  bestByPriorities,
   decisiveCriterion,
+  prioritiesFor,
   restrictionsForRoute,
   sortOrderFor,
   isStockZone,
@@ -159,5 +161,26 @@ describe('priorities', () => {
     const route = mockRoutes.find((r) => r.id === 'r_hub_idf_sdd')!;
     expect(restrictionsForRoute(route, mockRestrictions).map((r) => r.id)).toEqual(['res_bulky_courier']);
     expect(restrictionsForRoute(mockRoutes.find((r) => r.id === 'r_wh_fr_colissimo')!, mockRestrictions)).toEqual([]);
+  });
+});
+
+describe('priorities from the delivery config', () => {
+  it('reads them from the configuration, then sort_orders, then the default', () => {
+    expect(prioritiesFor(cfg('cfg_sdd'), mockSortOrders, 'ecom_fr')).toMatchObject({ source: 'delivery_configs.sort_order', isDefault: false });
+    expect(prioritiesFor({ ...cfg('cfg_hd_std') }, mockSortOrders, 'ecom_fr')).toMatchObject({ source: 'sort_orders/so_hd' });
+    expect(prioritiesFor(cfg('cfg_ckc'), mockSortOrders, 'ecom_fr')).toMatchObject({ source: 'default', isDefault: true });
+    expect(prioritiesFor({ id: 'c', delivery_method: 'x', priorities: ['eta_end', { field: 'cost', order: 'desc' }] }, []).order.sort_criterias).toEqual([
+      { field: 'eta_end' },
+      { field: 'cost', desc: true },
+    ]);
+    expect(prioritiesFor({ id: 'c', delivery_method: 'x', sort_order_id: 'so_sdd' }, mockSortOrders).order.sort_criterias).toEqual(mockSortOrders[0].sort_criterias);
+  });
+
+  it('picks the fastest schema holding the stock', () => {
+    const schemas = buildSchemas(cfg('cfg_sdd'), { location: { country: 'FR', zip_code: '75011' } }, mockRoutes, ctx);
+    const fastest = { id: 'f', sort_criterias: [{ field: 'eta_end' }] };
+    expect(ids(schemas[bestByPriorities(fastest, schemas, () => true)])).toBe('r_stores_idf_sdd');
+    const noStores = (i: number) => !schemas[i].originZoneId?.startsWith('z_stores');
+    expect(ids(schemas[bestByPriorities(fastest, schemas, noStores)])).toBe('r_hub_idf_sdd');
   });
 });

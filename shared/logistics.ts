@@ -530,3 +530,79 @@ export function routeConstraints(route: DeliveryRoute): string[] {
     ...(c.order_constraints ?? []).map((o) => `${o.name ?? '?'} ${o.op ?? ''} ${o.value ?? ''}`.trim()),
   ];
 }
+
+export interface Priorities {
+  order: SortOrder;
+  /** Where the priorities come from: a delivery config field, GET /sort_orders, or the default rule. */
+  source: string;
+  isDefault: boolean;
+}
+
+/** OneStock default: "The fastest (end of delivery slot)". */
+export const DEFAULT_SORT_ORDER: SortOrder = { id: 'default', sort_criterias: [{ field: 'eta_end', desc: false }] };
+
+type Criterion = { field: string; desc?: boolean };
+
+function toCriteria(value: unknown, sortOrders: SortOrder[], depth = 0): Criterion[] | undefined {
+  if (depth > 3 || value === null || value === undefined) return undefined;
+  if (typeof value === 'string') {
+    const ref = sortOrders.find((s) => s.id === value);
+    if (ref?.sort_criterias?.length) return ref.sort_criterias;
+    return value ? [{ field: value }] : undefined;
+  }
+  if (Array.isArray(value)) {
+    const list = value
+      .map((v): Criterion | undefined => {
+        if (typeof v === 'string') return { field: v };
+        if (v && typeof v === 'object') {
+          const o = v as Record<string, unknown>;
+          const field = (o.field ?? o.criteria ?? o.criterion ?? o.key ?? o.name ?? o.metric ?? o.id) as string | undefined;
+          if (typeof field !== 'string') return undefined;
+          const dir = String(o.order ?? o.direction ?? o.sort ?? '').toLowerCase();
+          return { field, desc: o.desc === true || o.descending === true || dir === 'desc' || dir === 'descending' || dir === '-1' };
+        }
+        return undefined;
+      })
+      .filter((c): c is Criterion => !!c);
+    return list.length ? list : undefined;
+  }
+  if (typeof value === 'object') {
+    const o = value as Record<string, unknown>;
+    for (const k of ['sort_criterias', 'sort_criteria', 'criterias', 'criteria', 'priorities', 'fields']) {
+      const c = toCriteria(o[k], sortOrders, depth + 1);
+      if (c) return c;
+    }
+    if (typeof o.id === 'string') return toCriteria(o.id, sortOrders, depth + 1);
+    if (typeof o.field === 'string') return toCriteria([o], sortOrders, depth + 1);
+  }
+  return undefined;
+}
+
+/**
+ * Priorities of a delivery configuration: read from the configuration returned by GET /delivery_configs
+ * (sort_order, sort_order_id, priorities, sort_criterias...), then GET /sort_orders, then the OneStock default.
+ */
+export function prioritiesFor(config: DeliveryConfig | undefined, sortOrders: SortOrder[], salesChannel?: string): Priorities {
+  if (config) {
+    const keys = Object.keys(config).filter((k) => /sort|priorit|criteri|ranking/i.test(k));
+    for (const k of keys) {
+      const criteria = toCriteria(config[k], sortOrders);
+      if (criteria?.length) return { order: { id: `${config.id}.${k}`, sort_criterias: criteria }, source: `delivery_configs.${k}`, isDefault: false };
+    }
+  }
+  const fromApi = config ? sortOrderFor(sortOrders, config.delivery_method, salesChannel ?? config.sales_channel_id) : undefined;
+  if (fromApi?.sort_criterias?.length) return { order: fromApi, source: `sort_orders/${fromApi.id}`, isDefault: false };
+  return { order: DEFAULT_SORT_ORDER, source: 'default', isDefault: true };
+}
+
+/** Index of the best schema according to the priorities (estimated values), among the eligible ones. */
+export function bestByPriorities(order: SortOrder, schemas: LogisticSchema[], eligible: (i: number) => boolean): number {
+  let best = -1;
+  schemas.forEach((s, i) => {
+    if (!eligible(i)) return;
+    if (best < 0) return (best = i);
+    const d = decisiveCriterion(order, schemas[best], s);
+    if (d && !d.chosenBetter) best = i;
+  });
+  return best;
+}

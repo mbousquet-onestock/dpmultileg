@@ -5,7 +5,7 @@
  *   warehouse -> Marseille hub -> ferry to Corsica
  *   warehouse -> stores shuttle -> click & collect
  */
-import { buildSchemas, criterionValue, deliveryMethods, sortOrderFor, zoneEndpoints, type ZoneContext } from '../../shared/logistics.js';
+import { buildSchemas, criterionValue, deliveryMethods, prioritiesFor, zoneEndpoints, type ZoneContext } from '../../shared/logistics.js';
 import type {
   DeliveryConfig,
   DeliveryRoute,
@@ -105,6 +105,7 @@ export const mockConfigs: DeliveryConfig[] = [
     carriers: [{ name: 'stuart', option: 'same_day' }],
     delivery_zone_ids: ['z_idf'],
     authorized_shipment_number: 1,
+    sort_order: { sort_criterias: [{ field: 'eta_end', desc: false }] },
   },
   {
     id: 'cfg_ckc',
@@ -243,7 +244,7 @@ function deliveryPromises(body: Record<string, unknown>): { delivery_options: Pr
       }
       let found: Alloc | undefined;
       // Rank the combinations with the configured sort order, like OneStock.
-      const order = sortOrderFor(mockSortOrders, config.delivery_method, salesChannel);
+      const order = prioritiesFor(config, mockSortOrders, salesChannel).order;
       const ranked = [...schemas].sort((a, b) => {
         for (const c of order?.sort_criterias ?? [{ field: 'eta_end', desc: false }]) {
           const va = criterionValue(a, c.field) ?? 0;

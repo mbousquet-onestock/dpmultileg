@@ -50,6 +50,8 @@ export interface DeliveryConfig {
   operations?: Record<string, string[]>;
   global_execution_times?: Record<string, string>;
   applied_restrictions?: string[];
+  /** Other fields returned by GET /delivery_configs (e.g. the priorities / sort order). */
+  [key: string]: unknown;
 }
 
 export interface Endpoint {

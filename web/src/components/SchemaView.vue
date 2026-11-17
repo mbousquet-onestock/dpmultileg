@@ -6,7 +6,8 @@ import {
   formatHours,
   restrictionsForRoute,
   routeConstraints,
-  sortOrderFor,
+  bestByPriorities,
+  prioritiesFor,
   matchShipmentsToSchemas,
   originAvailability,
   schemaCost,
@@ -31,12 +32,12 @@ const transit = (s: LogisticSchema) => formatHours(s.minHours, s.maxHours, units
 
 /* ------------------------------------------------------------------ priorities (GET /sort_orders) */
 
-const sortOrder = computed(() =>
-  option.value ? sortOrderFor(state.referential?.sort_orders ?? [], option.value.delivery_method, state.salesChannel) : undefined,
-);
+const priorities = computed(() => prioritiesFor(data.value?.entry.config, state.referential?.sort_orders ?? [], state.salesChannel));
+const sortOrder = computed(() => priorities.value.order);
 function criterionLabel(field: string): string {
   const f = field.toLowerCase();
-  if (/eta|delay|time|date|lead/.test(f)) return t('critEta');
+  if (/eta_start/.test(f)) return t('critEtaStart');
+  if (/eta|delay|time|date|lead|fast/.test(f)) return t('critEta');
   if (/carbon|co2|footprint/.test(f)) return t('critCarbon');
   if (/cost|price|fee/.test(f)) return t('critCost');
   if (/shipment|split/.test(f)) return t('critShipments');
@@ -117,6 +118,8 @@ interface Row {
   schema: LogisticSchema;
   number: number;
   chosen: boolean;
+  /** Best schema according to the configured priorities, among the ones holding the stock. */
+  expected: boolean;
   /** Legs returned by OneStock for this schema (multi-leg chains may be partially returned). */
   returnedLegs: number;
   availability: OriginAvailability[] | null;
@@ -132,17 +135,24 @@ const rows = computed<Row[]>(() => {
     schema,
     number: i + 1,
     chosen: matches.includes(i),
+    expected: false,
     returnedLegs: d.shipments.filter((_, k) => matches[k] === i).reduce((n, s) => Math.max(n, s.legs.length), 0),
     availability: stock.value ? originAvailability(schema, lines.value, stock.value, zoneCtx.value) : null,
     cost: schemaCost(schema),
     reasons: [],
   }));
   const hasStock = (r: Row) => !r.availability || r.availability.every((a) => a.endpoints.length > 0);
-  const chosen = base.filter((r) => r.chosen);
-  const ref0 = chosen[0];
-  const stocked = base.filter(hasStock);
-  const fastest = Math.min(...stocked.map((r) => r.schema.maxHours));
-  const cheapest = Math.min(...stocked.map((r) => r.cost ?? Infinity));
+  const order = sortOrder.value;
+  const expectedIdx = bestByPriorities(order, base.map((r) => r.schema), (i) => hasStock(base[i]));
+  if (expectedIdx >= 0) base[expectedIdx].expected = true;
+  const expected = base[expectedIdx];
+  const ref0 = base.find((r) => r.chosen);
+  const fmt = (txt: string, d: { rank: number; field: string; chosen: number; other: number }) =>
+    txt
+      .replace('{rank}', String(d.rank))
+      .replace('{label}', criterionLabel(d.field))
+      .replace('{chosen}', criterionFormat(d.field, d.chosen))
+      .replace('{other}', criterionFormat(d.field, d.other));
 
   for (const r of base) {
     const reasons: Reason[] = [];
@@ -161,35 +171,29 @@ const rows = computed<Row[]>(() => {
       reasons.unshift({ ok: true, text: t('whyChosenByPromise') });
       if (r.returnedLegs && r.returnedLegs < r.schema.legs.length)
         reasons.push({ ok: null, text: t('whyPartialLegs').replace('{n}', String(r.returnedLegs)).replace('{m}', String(r.schema.legs.length)) });
-      if (sortOrder.value?.sort_criterias?.length) {
-        reasons.push({ ok: true, text: t('whyRankedFirst') });
-      } else if (hasStock(r) && stocked.length > 1) {
-        if (r.schema.maxHours <= fastest) reasons.push({ ok: true, text: t('whyFastest') });
-        else if (r.cost !== undefined && r.cost <= cheapest) reasons.push({ ok: true, text: t('whyCheapest') });
-        else {
-          const faster = stocked.find((o) => !o.chosen && o.schema.maxHours < r.schema.maxHours);
-          if (faster) reasons.push({ ok: null, text: t('whyFasterExists').replace('{n}', String(faster.number)) });
-        }
+      if (r.expected) reasons.push({ ok: true, text: t('whyMatchesPriorities') });
+      else if (expected) {
+        const d = decisiveCriterion(order, expected.schema, r.schema);
+        reasons.push({
+          ok: false,
+          text: d ? fmt(t('whyPrioritiesPointElsewhere'), d).replaceAll('{n}', String(expected.number)) : t('whyPrioritiesTie').replace('{n}', String(expected.number)),
+        });
       }
-    } else if (ref0) {
-      const decision = hasStock(r) ? decisiveCriterion(sortOrder.value, ref0.schema, r.schema) : undefined;
-      if (!hasStock(r)) {
-        /* the stock reason is already given */
-      } else if (decision) {
-        const vals = (txt: string) =>
-          txt
-            .replace('{rank}', String(decision.rank))
-            .replace('{label}', criterionLabel(decision.field))
-            .replace('{chosen}', criterionFormat(decision.field, decision.chosen))
-            .replace('{other}', criterionFormat(decision.field, decision.other));
-        reasons.push(decision.chosenBetter ? { ok: false, text: vals(t('whyLostOnCriterion')) } : { ok: null, text: vals(t('whyBetterButExcluded')) });
-      } else if (r.schema.maxHours > ref0.schema.maxHours) {
-        reasons.push({ ok: false, text: t('whySlower').replace('{a}', transit(r.schema)).replace('{b}', transit(ref0.schema)) });
-      } else if (r.cost !== undefined && ref0.cost !== undefined && r.cost > ref0.cost) {
-        reasons.push({ ok: false, text: t('whyMoreExpensive').replace('{a}', formatMoney(r.cost, currency.value)).replace('{b}', formatMoney(ref0.cost, currency.value)) });
-      } else {
-        reasons.push({ ok: null, text: t('whyNotChosenOther') });
-      }
+    } else if (r.expected && ref0) {
+      const d = decisiveCriterion(order, ref0.schema, r.schema);
+      reasons.unshift({ ok: null, text: t('whyExpectedNotChosen') });
+      if (d && !d.chosenBetter) reasons.push({ ok: null, text: fmt(t('whyExpectedBetter'), d) });
+      reasons.push({ ok: null, text: t('whyExpectedCauses') });
+    } else if (r.expected) {
+      reasons.unshift({ ok: true, text: t('whyExpectedOnly') });
+    } else if (ref0 && hasStock(r)) {
+      const d = decisiveCriterion(order, ref0.schema, r.schema);
+      if (d?.chosenBetter) reasons.push({ ok: false, text: fmt(t('whyLostOnCriterion'), d) });
+      else if (d) reasons.push({ ok: null, text: fmt(t('whyBetterButExcluded'), d) });
+      else reasons.push({ ok: null, text: t('whyNotChosenOther') });
+    } else if (expected && hasStock(r)) {
+      const d = decisiveCriterion(order, expected.schema, r.schema);
+      if (d?.chosenBetter) reasons.push({ ok: false, text: fmt(t('whyLostOnCriterion'), d) });
     }
     // Restrictions and constraints of the carriers used (possible exclusion causes, to check against the items).
     for (const leg of r.schema.legs) {
@@ -201,8 +205,14 @@ const rows = computed<Row[]>(() => {
     }
     r.reasons = reasons;
   }
-  // Chosen schema first, then the ones with stock, fastest first.
-  return [...base].sort((a, b) => Number(b.chosen) - Number(a.chosen) || Number(hasStock(b)) - Number(hasStock(a)) || a.schema.maxHours - b.schema.maxHours);
+  // Chosen schema first, then the expected one, then the ones with stock, fastest first.
+  return [...base].sort(
+    (a, b) =>
+      Number(b.chosen) - Number(a.chosen) ||
+      Number(b.expected) - Number(a.expected) ||
+      Number(hasStock(b)) - Number(hasStock(a)) ||
+      a.schema.maxHours - b.schema.maxHours,
+  );
 });
 
 const anyChosen = computed(() => rows.value.some((r) => r.chosen));
@@ -260,22 +270,27 @@ const anyChosen = computed(() => rows.value.some((r) => r.chosen));
         </div>
         <div class="priorities">
           <span class="os-body-l">{{ t('prioritiesTitle') }}</span>
-          <ol v-if="sortOrder?.sort_criterias?.length" class="os-body-s">
-            <li v-for="(c, k) in sortOrder.sort_criterias" :key="k">
+          <ol class="os-body-s">
+            <li v-for="(c, k) in sortOrder.sort_criterias ?? []" :key="k">
               <strong>{{ criterionLabel(c.field) }}</strong>
               <span class="os-text-secondary"> ({{ c.field }}, {{ c.desc ? t('critDesc') : t('critAsc') }})</span>
             </li>
           </ol>
-          <span v-else class="os-body-s os-text-secondary">{{ t('prioritiesNone') }}</span>
+          <span class="os-body-s os-text-secondary">
+            {{ priorities.isDefault ? t('prioritiesDefault') : t('prioritiesSource').replace('{source}', priorities.source) }}
+          </span>
           <span class="os-body-s os-text-secondary">{{ t('prioritiesHint') }}</span>
         </div>
         <OsAlert v-if="option.status !== 'none' && data.theoretical.length && !anyChosen" type="info" :subtitle="t('whyNoRoutesReturned')" />
         <p v-if="!data.theoretical.length" class="os-label-s os-text-secondary">{{ t('noSchema') }}</p>
 
-        <div v-for="row in rows" :key="row.number" class="theo" :class="{ used: row.chosen }">
+        <div v-for="row in rows" :key="row.number" class="theo" :class="{ used: row.chosen, expected: row.expected && !row.chosen }">
           <div class="theo-head os-body-s os-text-secondary">
             <span>#{{ row.number }} · {{ row.schema.legs.length }} {{ row.schema.legs.length > 1 ? t('legs') : t('leg') }} · {{ t('transit') }} {{ transit(row.schema) }}</span>
-            <OsBadge v-if="row.chosen" :text="t('schemaSelected')" color="green" icon="check" />
+            <span class="badges">
+              <OsBadge v-if="row.expected" :text="t('schemaExpected')" color="blue" icon="star" />
+              <OsBadge v-if="row.chosen" :text="t('schemaSelected')" color="green" icon="check" />
+            </span>
           </div>
           <SchemaChain :legs="row.schema.legs" :destination="dest" compact />
           <ul v-if="row.reasons.length" class="reasons">
@@ -322,6 +337,8 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .config { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .theo { border: 1px dashed var(--os-border); border-radius: 5px; padding: 8px 10px; }
 .theo.used { border: 1px solid var(--os-green-1000); background: var(--os-green-t-100); --chain-bg: #ecf5ec; }
+.theo.expected { border: 1px solid var(--os-blue-1000); background: var(--os-blue-t-100); --chain-bg: #eaf4fe; }
+.badges { display: inline-flex; gap: 6px; }
 .theo-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 .reasons { list-style: none; margin: 6px 0 0; padding: 8px 0 0; border-top: 1px solid var(--os-border); display: flex; flex-direction: column; gap: 4px; }
 .reasons li { display: flex; align-items: flex-start; gap: 6px; color: var(--os-text-primary); }
