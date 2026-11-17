@@ -5,9 +5,7 @@ Une extension UI OneStock (`bo.page`) qui permet de :
 1. **sélectionner des articles** (`GET /items`) et leurs quantités,
 2. **choisir un canal de vente et une destination** (adresse, zone ou lieu de stock), avec en option le prix de commande, les modes de livraison et une date de simulation (même écran que le testeur de promesse du back-office),
 3. **calculer les options de livraison possibles** (`GET /delivery_promises`, avec `fields: delivery_options.delivery_routes`),
-4. **voir le schéma logistique** d'une option sélectionnée :
-   - le **schéma retenu** par la promesse : les expéditions, et pour chacune les étapes (routes) dans l'ordre, de l'origine (entrepôt, hub, magasin) jusqu'au client,
-   - les **schémas possibles** : toutes les combinaisons de routes (`GET /delivery_routes`) compatibles avec la configuration du mode (`GET /delivery_configs` : transporteurs, zones de livraison) et la destination (`GET /zones`). Plusieurs routes peuvent s'enchaîner, par exemple entrepôt → hub (linehaul) → client (coursier jour même).
+4. **voir les schémas logistiques possibles** d'une option sélectionnée :toutes les combinaisons de routes (`GET /delivery_routes`) compatibles avec la configuration du mode (`GET /delivery_configs` : transporteurs, zones de livraison) et la destination (`GET /zones`). Plusieurs routes peuvent s'enchaîner, par exemple entrepôt → hub (linehaul) → client (coursier jour même).
 
 ![Schéma](docs/screenshot.png)
 

@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
+import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsTag } from '@onestock-public/design-system';
 import { formatHours } from '@shared/logistics';
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
 import { formatDate, formatMoney, t } from '../i18n';
 import { currency, destination, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
 import SchemaChain from './SchemaChain.vue';
 
-const showTheoretical = ref(false);
 const showRaw = ref(false);
 
 const data = computed(() => selectedSchemas.value);
@@ -15,13 +14,6 @@ const dest = computed(() => option.value?.destination ?? destination.value ?? {}
 const usedKeys = computed(() => new Set((data.value?.shipments ?? []).map((s) => s.legs.map((l) => l.route?.id).join('>'))));
 const units = computed(() => ({ hour: t('hour'), day: t('day') }));
 
-watch(
-  () => state.selected,
-  () => {
-    showTheoretical.value = !!data.value && data.value.shipments.length === 0;
-  },
-  { immediate: true },
-);
 
 const zoneName = (id: string) => zoneCtx.value.zones.get(id)?.name ?? id;
 </script>
@@ -63,34 +55,14 @@ const zoneName = (id: string) => zoneCtx.value.zones.get(id)?.name ?? id;
         :subtitle="option.excluded_line_items.map((l) => `${itemLabel(l.item_id)} × ${l.qty}`).join(', ')"
       />
 
-      <!-- Schema actually used by the delivery promise -->
-      <section v-if="data.shipments.length" class="block">
-        <span class="os-label-l block-title"><OsIcon icon="route" size="s" color="brand" /> {{ t('schemaUsed') }}</span>
-        <div v-for="(shipment, i) in data.shipments" :key="i" class="shipment">
-          <div class="shipment-head">
-            <OsBadge :text="`${t('shipment')} ${i + 1}`" color="blue" type="secondary" />
-            <OsBadge v-if="shipment.legs.length > 1" :text="`${shipment.legs.length} ${t('legs')}`" color="purple" />
-            <span v-if="shipment.items.length" class="os-label-s">
-              {{ shipment.items.map((it) => `${itemLabel(it.id)} × ${it.quantity}`).join(', ') }}
-            </span>
-            <span v-if="shipment.eta_end" class="os-label-s os-text-secondary eta">≤ {{ formatDate(shipment.eta_end) }}</span>
-          </div>
-          <SchemaChain :legs="shipment.legs" :destination="dest" />
-        </div>
-      </section>
-      <OsAlert v-else-if="option.status !== 'none'" type="info" :subtitle="t('schemaNoRoutes')" />
-
       <OsDivider />
 
-      <!-- Theoretical schemas from configuration -->
-      <OsCollapse v-model="showTheoretical">
-        <template #header>
-          <div class="collapse-head">
-            <span class="os-label-l">{{ t('schemaTheoretical') }} ({{ data.theoretical.length }})</span>
-            <span class="os-body-s os-text-secondary">{{ t('schemaTheoreticalHint') }}</span>
-          </div>
-        </template>
-        <template #content>
+      <!-- Possible schemas from configuration -->
+      <section class="block">
+        <div class="collapse-head">
+          <span class="os-label-l">{{ t('schemaTheoretical') }} ({{ data.theoretical.length }})</span>
+          <span class="os-body-s os-text-secondary">{{ t('schemaTheoreticalHint') }}</span>
+        </div>
           <div class="theoretical">
             <div v-if="data.entry.config" class="config os-body-s">
               <span class="os-text-secondary">{{ t('carrier') }} :</span>
@@ -112,8 +84,7 @@ const zoneName = (id: string) => zoneCtx.value.zones.get(id)?.name ?? id;
               <SchemaChain :legs="s.legs" :destination="dest" compact />
             </div>
           </div>
-        </template>
-      </OsCollapse>
+      </section>
 
       <OsDivider />
 
