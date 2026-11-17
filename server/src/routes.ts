@@ -1,5 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
+import { collectStockLines } from '../../shared/logistics.js';
 import { asList } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRoute, Endpoint, Item, SalesChannel, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
@@ -156,7 +157,7 @@ export function apiRouter(): Router {
 
   /* ---------------------------------------------------------------- OneStock data (authenticated) */
 
-  r.use(['/referential', '/endpoints', '/items', '/delivery_promises'], (req, res, next) => {
+  r.use(['/referential', '/endpoints', '/items', '/delivery_promises', '/stocks'], (req, res, next) => {
     void requireSession(req, res, next);
   });
 
@@ -240,6 +241,19 @@ export function apiRouter(): Router {
       if (typeof b.from === 'number') payload.from = b.from;
       const result = await callOnestock(t, 'GET', '/delivery_promises', payload);
       res.json({ request: payload, response: result });
+    }),
+  );
+
+  /** Stock of some items in some stock locations (used to explain why a schema is chosen or not). */
+  r.post(
+    '/stocks',
+    wrap(async (req, res) => {
+      const t = target(req.session!);
+      const itemIds = Array.isArray(req.body?.item_ids) ? (req.body.item_ids as unknown[]).map(String).slice(0, 50) : [];
+      const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 200) : [];
+      if (!itemIds.length || !endpointIds.length) return res.json({ stocks: [] });
+      const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
+      res.json({ stocks: collectStockLines(result) });
     }),
   );
 

@@ -313,6 +313,13 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
       if (name) list = list.filter((e) => `${e.id} ${e.name}`.toLowerCase().includes(name));
       return { endpoints: list };
     }
+    case '/stocks': {
+      const items = (body.item_ids as string[] | undefined) ?? [];
+      const eps = (body.endpoint_ids as string[] | undefined) ?? [];
+      return {
+        stocks: eps.flatMap((e) => items.filter((i) => (stock[e]?.[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: stock[e][i], type: 'on_hand' }))),
+      };
+    }
     case '/sales_channels':
       return { sales_channels: mockSalesChannels };
     case '/items':

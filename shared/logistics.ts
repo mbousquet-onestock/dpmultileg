@@ -346,3 +346,92 @@ export function formatHours(min?: number, max?: number, units = { hour: 'h', day
 }
 
 export const isFulfillable = (o: PromiseOption) => o.status !== 'none';
+
+/* ------------------------------------------------------------------------------------------------
+ * Schema chosen by the delivery promise, and why
+ * ---------------------------------------------------------------------------------------------- */
+
+/**
+ * Find, for each shipment returned by the promise, the possible schema it corresponds to.
+ * OneStock may return only some legs of a multi-leg chain (e.g. the first one): a schema matches when it contains
+ * every returned route, in the same order. Exact matches win, then the shortest chain, then the fastest.
+ * Returns the index of the matched schema for each shipment (-1 when none).
+ */
+export function matchShipmentsToSchemas(schemas: LogisticSchema[], shipments: Shipment[]): number[] {
+  return shipments.map((shipment) => {
+    const used = shipment.legs.map((l) => l.route?.id ?? (l.promise.carrier ? `carrier:${l.promise.carrier.name}|${l.promise.carrier.option}` : '')).filter(Boolean);
+    if (!used.length) return -1;
+    let best = -1;
+    let bestScore = Infinity;
+    schemas.forEach((s, i) => {
+      const ids = s.legs.map((l) => l.route.id);
+      const carriers = s.legs.map((l) => `carrier:${l.route.carrier.name}|${l.route.carrier.option}`);
+      let pos = -1;
+      for (const u of used) {
+        const idx = ids.findIndex((id, k) => k > pos && (id === u || carriers[k] === u));
+        if (idx < 0) return;
+        pos = idx;
+      }
+      const score = (ids.length - used.length) * 10_000 + s.maxHours;
+      if (score < bestScore) {
+        bestScore = score;
+        best = i;
+      }
+    });
+    return best;
+  });
+}
+
+export interface StockLine {
+  endpoint_id: string;
+  item_id: string;
+  quantity: number;
+  type?: string;
+}
+
+export interface OriginAvailability {
+  item_id: string;
+  qty: number;
+  /** Stock locations of the origin zone holding enough stock for this line. */
+  endpoints: { id: string; quantity: number }[];
+}
+
+const AVAILABLE_TYPES = new Set(['on_hand', 'available', 'physical', 'stock', '']);
+
+/** Stock available (on hand) per item at the origin of a schema. */
+export function originAvailability(schema: LogisticSchema, lines: { item_id: string; qty: number }[], stock: StockLine[], ctx: ZoneContext): OriginAvailability[] {
+  const origin = zoneEndpoints(ctx.zones.get(schema.originZoneId ?? ''), ctx).map((e) => e.id);
+  return lines.map((line) => {
+    const byEndpoint = new Map<string, number>();
+    for (const s of stock) {
+      if (s.item_id !== line.item_id || !origin.includes(s.endpoint_id) || !AVAILABLE_TYPES.has(s.type ?? '')) continue;
+      byEndpoint.set(s.endpoint_id, (byEndpoint.get(s.endpoint_id) ?? 0) + s.quantity);
+    }
+    return {
+      item_id: line.item_id,
+      qty: line.qty,
+      endpoints: [...byEndpoint.entries()].filter(([, q]) => q >= line.qty).map(([id, quantity]) => ({ id, quantity })),
+    };
+  });
+}
+
+/** Sum of the per parcel costs configured on the legs (metric_values), undefined when none is configured. */
+export function schemaCost(schema: LogisticSchema): number | undefined {
+  const costs = schema.legs.map((l) => l.route.metric_values?.cost_by_parcel ?? l.route.metric_values?.cost);
+  if (costs.every((c) => c === undefined)) return undefined;
+  return costs.reduce<number>((sum, c) => sum + (c ?? 0), 0);
+}
+
+/** Collect stock lines from any payload shape ({stocks: [...]}, keyed objects, nested lists). */
+export function collectStockLines(payload: unknown, depth = 0): StockLine[] {
+  if (!payload || typeof payload !== 'object' || depth > 6) return [];
+  if (Array.isArray(payload)) return payload.flatMap((p) => collectStockLines(p, depth + 1));
+  const o = payload as Record<string, unknown>;
+  const item = o.item_id ?? o.item;
+  const endpoint = o.endpoint_id ?? o.endpoint;
+  const qty = o.quantity ?? o.qty ?? o.stock;
+  if (typeof item === 'string' && typeof endpoint === 'string' && (typeof qty === 'number' || typeof qty === 'string')) {
+    return [{ item_id: item, endpoint_id: endpoint, quantity: Number(qty) || 0, type: typeof o.type === 'string' ? o.type : undefined }];
+  }
+  return Object.values(o).flatMap((v) => collectStockLines(v, depth + 1));
+}

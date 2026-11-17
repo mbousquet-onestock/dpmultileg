@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { mockConfigs, mockEndpoints, mockRoutes, mockZones } from '../server/src/mock.js';
-import { buildSchemas, isStockZone, orderLegs, shipmentsFromPromise, zoneContains, zonesConnect, type ZoneContext } from './logistics.js';
+import {
+  buildSchemas,
+  collectStockLines,
+  isStockZone,
+  matchShipmentsToSchemas,
+  orderLegs,
+  originAvailability,
+  shipmentsFromPromise,
+  zoneContains,
+  zonesConnect,
+  type ZoneContext,
+} from './logistics.js';
 import { asList } from './normalize.js';
 
 const ctx: ZoneContext = {
@@ -87,5 +98,37 @@ describe('asList', () => {
     expect(asList({ zones: [{ id: 'a' }] }, 'zones')).toEqual([{ id: 'a' }]);
     expect(asList({ zones: { b: { name: 'B' } } }, 'zones')).toEqual([{ id: 'b', name: 'B' }]);
     expect(asList([{ _id: 'c' }])).toEqual([{ _id: 'c', id: 'c' }]);
+  });
+});
+
+describe('selected schema and why', () => {
+  const dest = { location: { country: 'FR', zip_code: '75011' } };
+  const schemas = buildSchemas(cfg('cfg_sdd'), dest, mockRoutes, ctx);
+
+  it('matches a multi-leg schema when OneStock returns only one of its legs', () => {
+    const shipments = shipmentsFromPromise(
+      { delivery_method: 'SDD', status: 'valid', destination: dest, delivery_routes: [{ id: 'r_wh_hub_paris', carrier: { name: 'geodis', option: 'linehaul' } }] },
+      mockRoutes,
+      ctx,
+    );
+    const [idx] = matchShipmentsToSchemas(schemas, shipments);
+    expect(ids(schemas[idx])).toBe('r_wh_hub_paris>r_hub_idf_sdd');
+  });
+
+  it('prefers the exact match', () => {
+    const shipments = shipmentsFromPromise(
+      { delivery_method: 'SDD', status: 'valid', destination: dest, delivery_routes: [{ id: 'r_stores_idf_sdd', carrier: { name: 'stuart', option: 'same_day' } }] },
+      mockRoutes,
+      ctx,
+    );
+    expect(ids(schemas[matchShipmentsToSchemas(schemas, shipments)[0]])).toBe('r_stores_idf_sdd');
+  });
+
+  it('checks the stock of the origin zone', () => {
+    const stock = collectStockLines({ stocks: [{ endpoint_id: 'WH_TLS', item_id: 'P', quantity: 4, type: 'on_hand' }, { endpoint_id: 'ST_PARIS', item_id: 'P', quantity: 2, type: 'in_transit' }] });
+    const fromStores = schemas.find((s) => ids(s) === 'r_stores_idf_sdd')!;
+    const fromWh = schemas.find((s) => ids(s) === 'r_wh_hub_paris>r_hub_idf_sdd')!;
+    expect(originAvailability(fromStores, [{ item_id: 'P', qty: 1 }], stock, ctx)[0].endpoints).toEqual([]);
+    expect(originAvailability(fromWh, [{ item_id: 'P', qty: 1 }], stock, ctx)[0].endpoints).toEqual([{ id: 'WH_TLS', quantity: 4 }]);
   });
 });

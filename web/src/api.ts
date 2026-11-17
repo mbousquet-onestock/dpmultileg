@@ -126,6 +126,8 @@ export const api = {
     request<{ environments: { site_id: string; environment: string; label: string | null }[] }>('GET', `/standalone/environments?site_id=${encodeURIComponent(siteId)}`),
   referential: () => request<Referential>('GET', '/referential'),
   searchItems: (pattern: string, lang: string, start = 0) => request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit: 20 }),
+  stocks: (itemIds: string[], endpointIds: string[]) =>
+    request<{ stocks: { endpoint_id: string; item_id: string; quantity: number; type?: string }[] }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),
   searchEndpoints: (query: string) => request<{ endpoints: Endpoint[] }>('POST', '/endpoints/search', { query }),
   deliveryPromises: (body: Record<string, unknown>) =>
     request<{ request: Record<string, unknown>; response: { delivery_options?: PromiseOption[] } }>('POST', '/delivery_promises', body),
