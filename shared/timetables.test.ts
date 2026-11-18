@@ -138,3 +138,21 @@ describe('GET /timetables/{id} carrier_pickup_timetable (cutoff instants)', () =
     expect(cal.next(FRIDAY_18H + 20 * H)?.start).toBe(FRIDAY_18H + (2 * 24 + 18) * H);
   });
 });
+
+describe('GET /timetables/{id} execution_time_timetable "France" (open 24/7)', () => {
+  const france = normalizeTimetable({
+    timetable: {
+      id: '3153a164-2f72-4094-b502-a4088aec157f',
+      name: 'France',
+      type: 'execution_time_timetable',
+      current_timetable: { from: 1794908280, to: 0, timezone: 'Europe/Paris', timespans: [{ start: 0, end: 604799, options: { open: true } }] },
+    },
+  })!;
+
+  it('lets operations run continuously, across the week boundary', () => {
+    const cal = new Calendar(france);
+    const SUNDAY_23H = FRIDAY_18H + (2 * 24 + 5) * H;
+    expect(cal.advance(FRIDAY_18H, 2)).toBe(FRIDAY_18H + 2 * H);
+    expect(cal.advance(SUNDAY_23H, 2)).toBe(SUNDAY_23H + 2 * H);
+  });
+});

@@ -177,6 +177,14 @@ export class Calendar {
       for (let w = -1; w <= this.horizonWeeks; w++)
         for (const s of this.spans) raw.push({ start: weekStart + w * WEEK + s.start, end: weekStart + w * WEEK + s.end });
       raw.sort((a, b) => a.start - b.start);
+      // Merge contiguous spans (OneStock timespans end at :59 or :01, e.g. 0 -> 604799 for a full week).
+      const merged: Interval[] = [];
+      for (const iv of raw) {
+        const last = merged[merged.length - 1];
+        if (last && iv.start <= last.end + 1) last.end = Math.max(last.end, iv.end);
+        else merged.push({ ...iv });
+      }
+      raw = merged;
     }
     const result: Interval[] = [];
     for (const iv of raw) {
