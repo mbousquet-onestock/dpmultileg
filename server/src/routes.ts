@@ -499,11 +499,17 @@ async function loadReferential(t: Target, requestId?: string) {
     },
     (ets) => {
       const missing = etIds.filter((id) => !ets.some((e) => e.id === id));
+      if (missing.length && (errors.get('execution_times') ?? []).some((m) => /403|not allowed/i.test(m)))
+        errors.set('execution_times', [`403: route not allowed for this API user, durations of ${missing.length} operation(s) counted as 0 (rights needed on GET /execution_times)`]);
       return [ets.map((e) => `${e.operation ?? e.name ?? e.id}: ${e.duration ?? '?'}`).join(', '), missing.length ? `not found: ${missing.join(', ')}` : '']
         .filter(Boolean)
         .join(' · ');
     },
   );
+
+  // Execution times are not blocking: without them, operations are counted as 0 (shown in the promise).
+  const etStep = report.find((r) => r.step === 'execution_times');
+  if (etStep) etStep.optional = true;
 
   // 4. timetables of the routes (pickup / transit / delivery) and of the execution times
   const ttIds = [

@@ -123,10 +123,17 @@ const rows = computed<Row[]>(() => {
   });
 });
 
+/** Operations whose execution time could not be read (counted as 0). */
+const unknownOperations = computed(() => {
+  const ops = [...(option.value?.analysis ?? []).flatMap((a) => a.operations ?? []), ...(option.value?.local_operations ?? [])];
+  return [...new Set(ops.filter((o) => o.unknown).map((o) => o.operation))];
+});
+
 const sortedRows = computed(() => [...rows.value].sort((x, y) => Number(y.selected) - Number(x.selected) || x.number - y.number));
 
 /** Leg by leg timing with the carrier timetables. */
 function operationLine(op: OperationTiming): string {
+  if (op.unknown) return t('tlOperationUnknown').replace('{op}', op.operation);
   return t('tlOperation')
     .replace('{op}', op.operation)
     .replace('{duration}', formatHours(op.hours, op.hours, units.value))
@@ -210,6 +217,7 @@ function chainLegs(a: SchemaAnalysis) {
         </template>
       </OsAlert>
       <OsAlert v-if="option.stock_unverified" type="warning" :subtitle="t('stockUnverified')" />
+      <OsAlert v-if="unknownOperations.length" type="warning" :subtitle="t('unknownOperations').replace('{list}', unknownOperations.join(', '))" />
       <p class="os-body-s os-text-secondary method">
         {{ t('localComputation').replace('{ops}', formatHours(option.operations_hours, option.operations_hours, units)) }}
       </p>

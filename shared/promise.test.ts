@@ -130,8 +130,8 @@ describe('with carrier timetables', () => {
 
   it('times operations on the execution timetable, or else on the stock location opening hours', () => {
     const noTimetable = run('SDD', [['SCARF_WOOL_RD', 1]], paris, { from: FRIDAY_18H, timetables, executionTimes: new Map() });
-    // unknown execution time id: duration 0, ready immediately
-    expect(noTimetable.analysis[0].operations?.[0].hours).toBe(0);
+    // execution time not readable (e.g. GET /execution_times not allowed): duration 0, flagged as unknown
+    expect(noTimetable.analysis[0].operations?.[0]).toMatchObject({ operation: 'pick_pack', hours: 0, unknown: true });
   });
 });
 

@@ -330,6 +330,8 @@ export interface OperationTiming {
   calendar?: string;
   start: number;
   end: number;
+  /** The execution time could not be read (e.g. GET /execution_times not allowed): duration counted as 0. */
+  unknown?: boolean;
 }
 
 export interface OperationsContext extends TimingContext {
@@ -380,11 +382,18 @@ export function operationsOf(config: DeliveryConfig, moment: OperationMoment): s
  * configuration (global_execution_times: operation -> execution time id). A value that is not a known id but a
  * duration ("2h") is accepted as is.
  */
-export function executionTimeFor(op: string, config: DeliveryConfig, endpoint: Endpoint | undefined, ctx: OperationsContext): { id?: string; et?: ExecutionTime; hours: number } {
+export function executionTimeFor(
+  op: string,
+  config: DeliveryConfig,
+  endpoint: Endpoint | undefined,
+  ctx: OperationsContext,
+): { id?: string; et?: ExecutionTime; hours: number; unknown: boolean } {
   const ref = endpoint?.execution_times?.find((e) => e.operation === op)?.id ?? (config.global_execution_times as Record<string, string> | undefined)?.[op];
   const et = ref ? ctx.executionTimes.get(ref) : undefined;
-  if (et) return { id: et.id, et, hours: parseDurationHours(et.duration) };
-  return { id: ref, hours: parseDurationHours(ref) };
+  if (et) return { id: et.id, et, hours: parseDurationHours(et.duration), unknown: false };
+  const hours = parseDurationHours(ref);
+  // an id that could not be loaded (not a duration written in place): unknown duration, counted as 0
+  return { id: ref, hours, unknown: !!ref && hours === 0 && !/^0+\s*[a-z]*$/i.test(ref) };
 }
 
 function endpointClosures(endpoint: Endpoint | undefined, events: ScheduledEvent[]): Interval[] {
@@ -409,7 +418,7 @@ export function runOperations(
   let t = start;
   const steps: OperationTiming[] = [];
   for (const op of operationsOf(config, moment)) {
-    const { id, et, hours } = executionTimeFor(op, config, endpoint, ctx);
+    const { id, et, hours, unknown } = executionTimeFor(op, config, endpoint, ctx);
     const tt = et?.timetable_id ? ctx.timetables.get(et.timetable_id) : undefined;
     const opening = !tt && endpoint?.opening_hours?.timespans?.length
       ? ({ id: `${endpoint.id}:opening`, name: endpoint.name ?? endpoint.id, hours: { timezone: endpoint.opening_hours.timezone ?? endpoint.timezone, timespans: endpoint.opening_hours.timespans } } as Timetable)
@@ -418,7 +427,7 @@ export function runOperations(
     const begin = hours > 0 && cal.constrained ? cal.next(t)?.start : t;
     const end = cal.advance(t, hours);
     if (end === undefined || begin === undefined) return undefined;
-    steps.push({ operation: op, moment, execution_time: et?.name ?? id, hours, calendar: (tt ?? opening)?.name, start: begin, end });
+    steps.push({ operation: op, moment, execution_time: et?.name ?? id, hours, calendar: (tt ?? opening)?.name, start: begin, end, unknown: unknown || undefined });
     t = end;
   }
   return { end: t, steps };
