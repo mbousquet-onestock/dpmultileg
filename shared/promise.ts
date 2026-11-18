@@ -303,6 +303,31 @@ export function decisiveBetween(order: SortOrder, selected: SchemaAnalysis, othe
   return undefined;
 }
 
+/** Key of a schema as displayed: carrier / option / departure zone / arrival zone of each leg. */
+export function schemaKey(schema: LogisticSchema): string {
+  return schema.legs.map((l) => `${l.route.carrier.name}|${l.route.carrier.option}|${l.route.origin_zone_id ?? ''}|${l.route.destination_zone_id ?? ''}`).join('>');
+}
+
+/**
+ * Identical schemas (same carriers and zones, leg by leg) are shown once: within a zone, the orchestrator chooses the
+ * shipping location. On a list sorted by priorities, keeps the first one able to serve every line (no exclusion),
+ * else the first one.
+ */
+function dedupeSchemas() {
+  let best: Map<string, SchemaAnalysis> | undefined;
+  return (a: SchemaAnalysis, _i: number, all: SchemaAnalysis[]) => {
+    if (!best) {
+      best = new Map();
+      for (const x of all) {
+        const k = schemaKey(x.schema);
+        const cur = best.get(k);
+        if (!cur || (cur.exclusions.length > 0 && x.exclusions.length === 0)) best.set(k, x);
+      }
+    }
+    return best.get(schemaKey(a.schema)) === a;
+  };
+}
+
 /** Comparator implementing the priorities. */
 function byPriorities(order: SortOrder) {
   return (a: SchemaAnalysis, b: SchemaAnalysis) => {
@@ -451,7 +476,9 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       cost: costs.some((c) => c.cost !== undefined) ? costs.reduce((sum, c) => sum + (c.cost ?? 0), 0) : schemaCost(schema),
       carbon: costs.some((c) => c.carbon !== undefined) ? costs.reduce((sum, c) => sum + (c.carbon ?? 0), 0) : undefined,
     };
-  }).sort(byPriorities(order));
+  })
+    .sort(byPriorities(order))
+    .filter(dedupeSchemas());
 
   const canServe = (a: SchemaAnalysis, item: string) => !a.exclusions.some((e) => e.item_id === item);
 

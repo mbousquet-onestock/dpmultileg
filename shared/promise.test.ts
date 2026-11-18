@@ -148,6 +148,17 @@ describe('priorities from the extension settings', () => {
   });
 });
 
+describe('identical schemas', () => {
+  it('shows once the schemas with the same carriers and zones (the orchestrator picks the location)', () => {
+    const twin = { ...mockRoutes.find((r) => r.id === 'r_wh_fr_colissimo')!, id: 'r_wh_fr_colissimo_bis', metric_values: { cost_by_parcel: 9 } };
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { routes: [...mockRoutes, twin] });
+    const keys = o.analysis.map((a) => a.schema.legs.map((l) => `${l.route.carrier.name}|${l.route.origin_zone_id}|${l.route.destination_zone_id}`).join('>'));
+    expect(new Set(keys).size).toBe(keys.length);
+    // the cheapest twin is kept (priorities of the method: cost first)
+    expect(used(o)).toEqual(['r_wh_fr_colissimo']);
+  });
+});
+
 describe('durations', () => {
   it('parses execution times', () => {
     expect(parseDurationHours('2h')).toBe(2);
