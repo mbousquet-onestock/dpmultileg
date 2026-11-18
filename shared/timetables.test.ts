@@ -101,3 +101,40 @@ describe('GET /timetables/{id} response', () => {
     expect(routeTimetables({ id: 'r_other', carrier: { name: 'colissimo', option: 'home' }, delivery_timetable_id: tt.id }, map).delivery?.id).toBe(tt.id);
   });
 });
+
+describe('GET /timetables/{id} carrier_pickup_timetable (cutoff instants)', () => {
+  // Real response "Colissimo": 1 second timespans = carrier cutoffs.
+  // Mon-Thu 12:00 and 19:00, Friday 11:00 and 17:00, Saturday 13:00 (Europe/Paris)
+  const pickup = normalizeTimetable({
+    timetable: {
+      id: '2dced4fc-51b2-4d6c-8bb0-3523abbe4f13',
+      name: 'Colissimo',
+      type: 'carrier_pickup_timetable',
+      current_timetable: {
+        from: 1794908280,
+        to: 0,
+        timezone: 'Europe/Paris',
+        timespans: [43200, 68400, 129600, 154800, 216000, 241200, 302400, 327600, 385200, 406800, 478800].map((start) => ({
+          start,
+          end: start + 1,
+          options: { open: true },
+        })),
+      },
+    },
+  })!;
+  const cal = new Calendar(pickup);
+  const WEDNESDAY_00H = FRIDAY_18H - (2 * 24 + 18) * H;
+
+  it('leaves at the next cutoff of the day', () => {
+    expect(cal.next(WEDNESDAY_00H + 12.5 * H)?.start).toBe(WEDNESDAY_00H + 19 * H);
+    expect(cal.next(WEDNESDAY_00H + 9 * H)?.start).toBe(WEDNESDAY_00H + 12 * H);
+  });
+
+  it('after the last Friday cutoff (17:00), leaves on Saturday 13:00', () => {
+    expect(cal.next(FRIDAY_18H)?.start).toBe(FRIDAY_18H + 19 * H);
+  });
+
+  it('after Saturday 13:00, waits for Monday 12:00', () => {
+    expect(cal.next(FRIDAY_18H + 20 * H)?.start).toBe(FRIDAY_18H + (2 * 24 + 18) * H);
+  });
+});
