@@ -1,7 +1,7 @@
 import { ref } from 'vue';
 
 const fr = {
-  title: 'Promesse de livraison multi-leg',
+  title: 'Delivery promise',
   subtitle: 'Simulez une commande et visualisez le schéma logistique de chaque option de livraison',
   items: 'Articles',
   addItem: 'Ajouter un article',
@@ -231,7 +231,7 @@ const fr = {
 type Dict = typeof fr;
 
 const en: Dict = {
-  title: 'Multi-leg delivery promise',
+  title: 'Delivery promise',
   subtitle: 'Simulate an order and see the logistic schema behind each delivery option',
   items: 'Items',
   addItem: 'Add an item',

@@ -127,7 +127,6 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
     <header class="page-head">
       <div>
         <h1 class="os-title-l">{{ t('title') }}</h1>
-        <p class="os-label-s os-text-secondary">{{ t('subtitle') }}</p>
       </div>
       <div class="session">
         <template v-if="session">
