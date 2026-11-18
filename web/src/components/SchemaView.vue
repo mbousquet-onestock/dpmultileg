@@ -4,7 +4,7 @@
  * selected schema(s), then the other possible schemas with the reason they were not selected.
  */
 import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
-import { criterionKind, formatHours, prioritiesFor, type LogisticSchema } from '@shared/logistics';
+import { criterionKind, formatHours, prioritiesFor, settingsPriorities, type LogisticSchema } from '@shared/logistics';
 import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
 import type { OperationTiming } from '@shared/timetables';
 import { computed, ref } from 'vue';
@@ -24,7 +24,14 @@ const configOpen = ref(false);
 
 /* ------------------------------------------------------------------ priorities */
 
-const priorities = computed(() => prioritiesFor(data.value?.entry.config, state.referential?.sort_orders ?? [], state.salesChannel));
+const priorities = computed(() =>
+  prioritiesFor(
+    data.value?.entry.config,
+    state.referential?.sort_orders ?? [],
+    state.salesChannel,
+    settingsPriorities(state.referential?.settings, option.value?.delivery_method ?? ''),
+  ),
+);
 const sortOrder = computed(() => priorities.value.order);
 function criterionLabel(field: string): string {
   const f = field.toLowerCase();
@@ -245,7 +252,7 @@ function chainLegs(a: SchemaAnalysis) {
             </li>
           </ol>
           <span class="os-body-s os-text-secondary">
-            {{ priorities.isDefault ? t('prioritiesDefault') : t('prioritiesSource').replace('{source}', priorities.source) }}
+            {{ priorities.isDefault ? t('prioritiesDefault') : priorities.source === 'settings' ? t('prioritiesFromSettings') : t('prioritiesSource').replace('{source}', priorities.source) }}
           </span>
         </div>
         <p v-if="!rows.length" class="os-label-s os-text-secondary">{{ t('noSchema') }}</p>
@@ -277,7 +284,6 @@ function chainLegs(a: SchemaAnalysis) {
               <span class="os-label-s">{{ itemLabel(l.item_id) }}</span>
               <span class="os-body-m qty">× {{ l.qty }}</span>
             </span>
-            <span class="os-body-s os-text-secondary">{{ t('carriedFrom').replace('{where}', endpointName(sh.endpoint)) }}</span>
           </div>
           <ul v-if="display.timeline && (row.a.timeline?.length || row.a.operations?.length)" class="timeline os-body-s">
             <li v-for="(line, k) in timelineLines(row.a)" :key="k"><OsIcon icon="time" size="xs" /> <span>{{ line }}</span></li>

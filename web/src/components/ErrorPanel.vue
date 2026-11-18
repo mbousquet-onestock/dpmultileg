@@ -76,7 +76,7 @@ async function copy() {
     </template>
     <template #actions>
       <OsButton v-if="apiErr && CONFIG_CODES.includes(apiErr.code)" type="secondary" icon="key" :text="t('configure')" @click="emit('configure')" />
-      <OsButton type="tertiary" color="neutral" icon="copy" :text="copied ? t('copied') : t('copy')" @click="copy" />
+      <OsButton type="tertiary" icon="copy" :text="copied ? t('copied') : t('copy')" @click="copy" />
     </template>
   </OsAlert>
 </template>

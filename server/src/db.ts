@@ -24,6 +24,9 @@ export interface Store {
   get(siteId: string, environment: string): Promise<CredentialRow | undefined>;
   list(siteId?: string): Promise<CredentialRow[]>;
   delete(siteId: string, environment: string): Promise<boolean>;
+  /** Extension settings of a site / environment (JSON), e.g. the priorities per delivery method. */
+  getSettings(siteId: string, environment: string): Promise<Record<string, unknown>>;
+  putSettings(siteId: string, environment: string, settings: Record<string, unknown>): Promise<void>;
 }
 
 const COLUMNS = ['site_id', 'environment', 'api_url', 'user_id', 'password_enc', 'extension_secrets_enc', 'label'] as const;
@@ -44,6 +47,13 @@ async function sqliteStore(path: string): Promise<Store> {
       extension_secrets_enc TEXT,
       label TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (site_id, environment)
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      site_id TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      data TEXT NOT NULL,
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       PRIMARY KEY (site_id, environment)
     );`);
@@ -70,6 +80,16 @@ async function sqliteStore(path: string): Promise<Store> {
     async delete(siteId, env) {
       return Number(db.prepare('DELETE FROM credentials WHERE site_id = ? AND environment = ?').run(siteId, env).changes) > 0;
     },
+    async getSettings(siteId, env) {
+      const row = db.prepare('SELECT data FROM settings WHERE site_id = ? AND environment = ?').get(siteId, env) as { data: string } | undefined;
+      return row ? (JSON.parse(row.data) as Record<string, unknown>) : {};
+    },
+    async putSettings(siteId, env, settings) {
+      db.prepare(
+        `INSERT INTO settings (site_id, environment, data) VALUES (?, ?, ?)
+         ON CONFLICT (site_id, environment) DO UPDATE SET data = excluded.data, updated_at = datetime('now')`,
+      ).run(siteId, env, JSON.stringify(settings));
+    },
   };
 }
 
@@ -88,6 +108,14 @@ async function postgresStore(url: string): Promise<Store> {
       extension_secrets_enc TEXT,
       label TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (site_id, environment)
+    )`);
+  await sql.query(`
+    CREATE TABLE IF NOT EXISTS dpm_settings (
+      site_id TEXT NOT NULL,
+      environment TEXT NOT NULL,
+      data JSONB NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (site_id, environment)
     )`);
@@ -117,6 +145,18 @@ async function postgresStore(url: string): Promise<Store> {
     async delete(siteId, env) {
       const r = await sql.query('DELETE FROM dpm_credentials WHERE site_id = $1 AND environment = $2 RETURNING site_id', [siteId, env]);
       return (r as unknown[]).length > 0;
+    },
+    async getSettings(siteId, env) {
+      const r = (await sql.query('SELECT data FROM dpm_settings WHERE site_id = $1 AND environment = $2', [siteId, env])) as { data: unknown }[];
+      const d = r[0]?.data;
+      return (typeof d === 'string' ? JSON.parse(d) : (d ?? {})) as Record<string, unknown>;
+    },
+    async putSettings(siteId, env, settings) {
+      await sql.query(
+        `INSERT INTO dpm_settings (site_id, environment, data) VALUES ($1, $2, $3::jsonb)
+         ON CONFLICT (site_id, environment) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+        [siteId, env, JSON.stringify(settings)],
+      );
     },
   };
 }

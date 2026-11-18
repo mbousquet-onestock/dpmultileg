@@ -3,11 +3,12 @@
  * Hidden "API configuration" tab: stores the OneStock API user/password (and extension secret) used to generate
  * tokens for a site/environment. Protected by the server ADMIN_TOKEN; passwords are never sent back to the browser.
  */
-import { OsAlert, OsBadge, OsButton, OsCardLayout, OsCheckbox, OsDivider, OsEntity, OsInputText, OsPicto } from '@onestock-public/design-system';
+import { OsAlert, OsBadge, OsButton, OsCardLayout, OsCheckbox, OsDivider, OsEntity, OsInputText, OsPicto, OsSelect } from '@onestock-public/design-system';
 import { computed, onMounted, ref, watch } from 'vue';
 import { adminApi, api, ApiError, type CredentialSummary } from '../api';
 import { t } from '../i18n';
-import { display } from '../store';
+import { PRIORITY_PRESETS } from '@shared/logistics';
+import { display, loadReferential, state } from '../store';
 
 const props = defineProps<{ siteId?: string; environment?: string; handshakeApiUrl?: string; signedSite?: string }>();
 const emit = defineEmits<{ saved: [{ site_id: string; environment: string }] }>();
@@ -138,6 +139,44 @@ async function remove(c: CredentialSummary) {
   }
 }
 
+/* ------------------------------------------------------------------ priorities per delivery method (settings) */
+
+const methods = computed(() => {
+  const seen = new Map<string, string>();
+  for (const c of state.referential?.delivery_configs ?? []) if (!seen.has(c.delivery_method)) seen.set(c.delivery_method, c.name ?? c.delivery_method);
+  return [...seen.entries()].map(([id, name]) => ({ id, name }));
+});
+const presetOptions = computed(() => [
+  { id: '', primaryText: t('presetDefault') },
+  ...Object.keys(PRIORITY_PRESETS).map((id) => ({ id, primaryText: t(`preset_${id}`) })),
+]);
+const prio = ref<Record<string, string>>({});
+watch(
+  () => state.referential?.settings,
+  (st) => {
+    const p = ((st ?? {}) as { priorities?: Record<string, unknown> }).priorities ?? {};
+    prio.value = Object.fromEntries(Object.entries(p).filter(([, v]) => typeof v === 'string')) as Record<string, string>;
+  },
+  { immediate: true },
+);
+const prioBusy = ref(false);
+const prioResult = ref<{ type: 'success' | 'danger'; text: string } | null>(null);
+async function savePriorities() {
+  if (!props.siteId || !props.environment) return;
+  prioBusy.value = true;
+  prioResult.value = null;
+  try {
+    const priorities = Object.fromEntries(Object.entries(prio.value).filter(([, v]) => !!v));
+    await adminApi.saveSettings(adminToken.value, props.siteId, props.environment, { ...(state.referential?.settings ?? {}), priorities });
+    await loadReferential();
+    prioResult.value = { type: 'success', text: t('prioSaved') };
+  } catch (e) {
+    prioResult.value = { type: 'danger', text: describe(e) };
+  } finally {
+    prioBusy.value = false;
+  }
+}
+
 onMounted(async () => {
   try {
     const h = await api.health();
@@ -165,6 +204,31 @@ onMounted(async () => {
           <OsCheckbox v-model="display.config" :label="t('displayConfig')" />
           <OsCheckbox v-model="display.timeline" :label="t('displayTimeline')" />
           <OsCheckbox v-model="display.reasons" :label="t('displayReasons')" />
+        </div>
+      </div>
+    </OsCardLayout>
+
+    <OsCardLayout v-if="methods.length">
+      <div class="block">
+        <div class="head">
+          <OsPicto icon="sort" />
+          <div class="texts">
+            <span class="os-label-l">{{ t('prioTitle') }}</span>
+            <span class="os-label-s os-text-secondary">{{ t('prioHint') }}</span>
+          </div>
+        </div>
+        <div class="body">
+          <div v-for="m in methods" :key="m.id" class="prio-row">
+            <div class="prio-method">
+              <span class="os-label-m">{{ m.name }}</span>
+              <span class="os-body-s os-text-secondary">{{ m.id }}</span>
+            </div>
+            <OsSelect v-model="prio[m.id]" class="prio-select" :options="presetOptions" :placeholder="t('presetDefault')" />
+          </div>
+          <OsAlert v-if="prioResult" :type="prioResult.type" :subtitle="prioResult.text" />
+          <div class="actions">
+            <OsButton icon="save" :text="t('prioSave')" :pending="prioBusy" :disabled="!authorized || !siteId || !environment" @click="savePriorities" />
+          </div>
         </div>
       </div>
     </OsCardLayout>
@@ -246,7 +310,7 @@ onMounted(async () => {
             <OsBadge
               v-if="server.verify_signature"
               :text="c.has_extension_secrets ? t('cfgSigned') : t('cfgUnsigned')" :color="c.has_extension_secrets ? 'green' : 'orange'" />
-            <OsButton type="tertiary" color="neutral" icon="edit" :aria-label="t('cfgEdit')" @click="edit(c)" />
+            <OsButton type="tertiary" icon="edit" :aria-label="t('cfgEdit')" @click="edit(c)" />
             <OsButton type="tertiary" color="red" icon="trash" :aria-label="t('remove')" @click="remove(c)" />
           </template>
         </OsEntity>
@@ -264,6 +328,10 @@ onMounted(async () => {
 .body { display: flex; flex-direction: column; gap: 16px; padding-left: 64px; }
 .field { max-width: 400px; }
 .checks { gap: 10px; }
+.prio-row { display: flex; align-items: center; gap: 16px; }
+.prio-method { display: flex; flex-direction: column; width: 220px; flex: none; }
+.prio-method .os-label-m { color: var(--os-text-primary); }
+.prio-select { flex: 1; max-width: 360px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
 .grid .wide { grid-column: 1 / -1; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; }

@@ -135,6 +135,19 @@ describe('with carrier timetables', () => {
   });
 });
 
+describe('priorities from the extension settings', () => {
+  // Parka to Paris: warehouse + colissimo = 6.50 € (24h-72h), Toulouse store + colissimo = 6.90 € (24h-48h)
+  const withStore = [...stock, { endpoint_id: 'ST_TLS', item_id: 'PARKA_WINTER_KK_M', quantity: 1, type: 'on_hand' }];
+  it('the cheapest, then the fastest', () => {
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { stock: withStore, settings: { priorities: { HD_standard: 'cheapest_then_fastest' } } });
+    expect(used(o)).toEqual(['r_wh_fr_colissimo']);
+  });
+  it('the fastest', () => {
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { stock: withStore, settings: { priorities: { HD_standard: 'fastest' } } });
+    expect(used(o)).toEqual(['r_stores_fr_colissimo']);
+  });
+});
+
 describe('durations', () => {
   it('parses execution times', () => {
     expect(parseDurationHours('2h')).toBe(2);

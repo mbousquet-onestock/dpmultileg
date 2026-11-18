@@ -19,6 +19,7 @@ import {
   destinationInZone,
   isClickAndCollect,
   prioritiesFor,
+  settingsPriorities,
   restrictionsForRoute,
   sameCarrier,
   schemaCost,
@@ -63,6 +64,8 @@ export interface PromiseInput {
   events?: ScheduledEvent[];
   /** Execution times of the operations (GET /execution_times) by id. */
   executionTimes?: Map<string, ExecutionTime>;
+  /** Extension settings (priorities per delivery method). */
+  settings?: Record<string, unknown>;
 }
 
 export type ExclusionKind = 'restriction' | 'constraint' | 'no_stock' | 'timetable';
@@ -355,7 +358,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   const stockUnverified = input.stock === null;
   const orderPrice = orderPriceOf(lines, items, input.price);
   const stock = input.stock ?? [];
-  const order = prioritiesFor(config, input.sortOrders, input.salesChannel).order;
+  const order = prioritiesFor(config, input.sortOrders, input.salesChannel, settingsPriorities(input.settings, method)).order;
   const applied = config.applied_restrictions?.length ? input.restrictions.filter((r) => config.applied_restrictions!.includes(r.id)) : input.restrictions;
   const maxShipments = config.authorized_shipment_number ?? 4;
   const opsHours = operationsHours(config);

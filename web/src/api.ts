@@ -12,6 +12,7 @@ export interface Referential {
   timetables?: Timetable[];
   scheduled_events?: ScheduledEvent[];
   execution_times?: ExecutionTime[];
+  settings?: Record<string, unknown>;
   load_report?: { step: string; path: string; ok: boolean; count: number; ms: number; detail?: string; error?: string; optional?: boolean; partial?: boolean }[];
 }
 
@@ -119,6 +120,10 @@ export const adminApi = {
     ),
   remove: (token: string, siteId: string, environment: string) =>
     request<unknown>('DELETE', `/admin/credentials/${encodeURIComponent(siteId)}/${encodeURIComponent(environment)}`, undefined, false, token),
+  getSettings: (token: string, siteId: string, environment: string) =>
+    request<{ settings: Record<string, unknown> }>('GET', `/admin/settings/${encodeURIComponent(siteId)}/${encodeURIComponent(environment)}`, undefined, false, token),
+  saveSettings: (token: string, siteId: string, environment: string, settings: Record<string, unknown>) =>
+    request<{ ok: boolean }>('PUT', `/admin/settings/${encodeURIComponent(siteId)}/${encodeURIComponent(environment)}`, { settings }, false, token),
   test: (token: string, f: CredentialForm) => request<{ ok: boolean; api_url?: string; message?: string }>('POST', '/admin/credentials/test', f, false, token),
 };
 

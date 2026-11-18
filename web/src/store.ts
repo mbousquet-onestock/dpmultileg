@@ -152,6 +152,7 @@ export async function runTest() {
       timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
       events: ref.scheduled_events ?? [],
       executionTimes: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
+      settings: ref.settings,
     });
     state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');

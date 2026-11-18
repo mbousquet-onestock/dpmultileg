@@ -133,7 +133,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
           <OsBadge :text="`${session.site_id} · ${session.environment}`" color="grey" icon="lan" />
           <OsBadge v-if="session.mock" :text="t('mockMode')" color="orange" />
         </template>
-        <OsButton type="tertiary" color="neutral" icon="settings-outline" :aria-label="t('openConfig')" :title="t('openConfig')" class="gear" @click="toggleConfig" />
+        <OsButton type="tertiary" icon="settings-outline" :aria-label="t('openConfig')" :title="t('openConfig')" class="gear" @click="toggleConfig" />
       </div>
     </header>
 

@@ -15,7 +15,7 @@ defineEmits<{ toggle: [boolean] }>();
           <span class="os-label-s os-text-secondary">{{ subtitle }}</span>
         </div>
         <OsButton v-if="optional && !active" type="secondary" :text="t('add')" @click="$emit('toggle', true)" />
-        <OsButton v-else-if="optional" type="tertiary" color="neutral" icon="trash" :aria-label="t('remove')" @click="$emit('toggle', false)" />
+        <OsButton v-else-if="optional" type="tertiary" icon="trash" :aria-label="t('remove')" @click="$emit('toggle', false)" />
       </div>
       <div v-if="!optional || active" class="body"><slot /></div>
     </div>

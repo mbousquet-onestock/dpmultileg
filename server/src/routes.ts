@@ -177,7 +177,9 @@ export function apiRouter(): Router {
       const t = target(req.session!);
       if (req.query.refresh) clearSiteCaches(t.site_id, t.environment);
       const result = await cached(t, 'referential', () => loadReferential(t, req.requestId));
-      res.json(result);
+      // Extension settings (priorities per delivery method...) are read on every call: they change immediately.
+      const settings = await (await getStore()).getSettings(t.site_id, t.environment);
+      res.json({ ...result, settings });
     }),
   );
 
@@ -276,7 +278,7 @@ export function apiRouter(): Router {
         const s = await readSession(header.slice(7));
         if (s.signed) {
           const site = str((req.params as Record<string, string>).site_id) ?? str(req.body?.site_id) ?? str(req.query.site_id);
-          const urlSite = req.path.match(/^\/credentials\/([^/]+)\//)?.[1];
+          const urlSite = req.path.match(/^\/(?:credentials|settings)\/([^/]+)\//)?.[1];
           const targetSite = urlSite ? decodeURIComponent(urlSite) : site;
           if (!targetSite || targetSite === s.site_id) {
             res.locals.adminSite = s.site_id;
@@ -321,6 +323,20 @@ export function apiRouter(): Router {
     if (deleted) log('info', 'credentials_deleted', { request_id: req.requestId, site_id, environment });
     res.status(deleted ? 204 : 404).end();
   });
+  /** Extension settings of a site / environment (priorities per delivery method). */
+  admin.get('/settings/:site_id/:environment', async (req, res) => {
+    const { site_id, environment } = req.params as { site_id: string; environment: string };
+    res.json({ settings: await (await getStore()).getSettings(site_id, environment) });
+  });
+  admin.put('/settings/:site_id/:environment', async (req, res) => {
+    const { site_id, environment } = req.params as { site_id: string; environment: string };
+    const settings = req.body?.settings;
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return res.status(400).json({ error: 'invalid_input', message: 'settings must be an object' });
+    await (await getStore()).putSettings(site_id, environment, settings as Record<string, unknown>);
+    log('info', 'settings_saved', { request_id: req.requestId, site_id, environment, keys: Object.keys(settings) });
+    res.json({ ok: true, settings });
+  });
+
   /** Check a user/password against OneStock POST /login without saving anything. */
   admin.post('/credentials/test', async (req, res) => {
     const b = req.body ?? {};

@@ -67,7 +67,7 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
   <section class="items">
     <div class="cards">
       <div v-for="(line, idx) in state.lines" :key="line.item.id" class="item-card">
-        <OsButton class="remove" type="tertiary" color="neutral" icon="close" :aria-label="t('remove')" @click="state.lines.splice(idx, 1)" />
+        <OsButton class="remove" type="tertiary" icon="close" :aria-label="t('remove')" @click="state.lines.splice(idx, 1)" />
         <div class="thumb">
           <img v-if="line.item.image" :src="line.item.image" alt="" />
           <OsIcon v-else icon="item" color="secondary" size="l" />

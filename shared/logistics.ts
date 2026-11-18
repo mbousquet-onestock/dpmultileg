@@ -582,7 +582,14 @@ function toCriteria(value: unknown, sortOrders: SortOrder[], depth = 0): Criteri
  * Priorities of a delivery configuration: read from the configuration returned by GET /delivery_configs
  * (sort_order, sort_order_id, priorities, sort_criterias...), then GET /sort_orders, then the OneStock default.
  */
-export function prioritiesFor(config: DeliveryConfig | undefined, sortOrders: SortOrder[], salesChannel?: string): Priorities {
+export function prioritiesFor(
+  config: DeliveryConfig | undefined,
+  sortOrders: SortOrder[],
+  salesChannel?: string,
+  /** Priorities set in the extension settings for this delivery method (take precedence). */
+  override?: { field: string; desc?: boolean }[],
+): Priorities {
+  if (override?.length) return { order: { id: 'settings', sort_criterias: override }, source: 'settings', isDefault: false };
   if (config) {
     const keys = Object.keys(config).filter((k) => /sort|priorit|criteri|ranking/i.test(k));
     for (const k of keys) {
@@ -605,4 +612,19 @@ export function bestByPriorities(order: SortOrder, schemas: LogisticSchema[], el
     if (d && !d.chosenBetter) best = i;
   });
   return best;
+}
+
+/** Priority rules proposed in the extension settings (per delivery method). */
+export const PRIORITY_PRESETS: Record<string, { field: string; desc?: boolean }[]> = {
+  fastest: [{ field: 'eta_end' }],
+  cheapest_then_fastest: [{ field: 'cost' }, { field: 'eta_end' }],
+  fastest_then_cheapest: [{ field: 'eta_end' }, { field: 'cost' }],
+  greenest_then_fastest: [{ field: 'carbon_footprint' }, { field: 'eta_end' }],
+};
+
+/** Priorities per delivery method stored in the extension settings. */
+export function settingsPriorities(settings: Record<string, unknown> | undefined, deliveryMethod: string): { field: string; desc?: boolean }[] | undefined {
+  const p = (settings?.priorities as Record<string, unknown> | undefined)?.[deliveryMethod];
+  if (typeof p === 'string') return PRIORITY_PRESETS[p];
+  return Array.isArray(p) ? (p as { field: string; desc?: boolean }[]) : undefined;
 }
