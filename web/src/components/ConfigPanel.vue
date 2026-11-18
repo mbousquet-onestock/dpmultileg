@@ -162,6 +162,7 @@ onMounted(async () => {
         </div>
         <div class="body checks">
           <OsCheckbox v-model="display.loadReport" :label="t('displayLoadReport')" />
+          <OsCheckbox v-model="display.config" :label="t('displayConfig')" />
           <OsCheckbox v-model="display.timeline" :label="t('displayTimeline')" />
           <OsCheckbox v-model="display.reasons" :label="t('displayReasons')" />
         </div>

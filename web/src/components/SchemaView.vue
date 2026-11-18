@@ -218,7 +218,7 @@ function chainLegs(a: SchemaAnalysis) {
       </OsAlert>
       <OsAlert v-if="option.stock_unverified" type="warning" :subtitle="t('stockUnverified')" />
       <OsAlert v-if="unknownOperations.length" type="warning" :subtitle="t('unknownOperations').replace('{list}', unknownOperations.join(', '))" />
-      <p class="os-body-s os-text-secondary method">
+      <p v-if="display.config" class="os-body-s os-text-secondary method">
         {{ t('localComputation').replace('{ops}', formatHours(option.operations_hours, option.operations_hours, units)) }}
       </p>
 
@@ -227,15 +227,15 @@ function chainLegs(a: SchemaAnalysis) {
       <section class="block">
         <div class="section-head">
           <span class="os-label-l">{{ t('schemaTheoretical') }}</span>
-          <span class="os-body-s os-text-secondary">{{ t('schemaTheoreticalHint') }}</span>
+          <span v-if="display.config" class="os-body-s os-text-secondary">{{ t('schemaTheoreticalHint') }}</span>
         </div>
-        <div v-if="data.entry.config" class="config os-body-s">
+        <div v-if="display.config && data.entry.config" class="config os-body-s">
           <span class="os-text-secondary">{{ t('carrier') }} :</span>
           <OsTag v-for="c in data.entry.config.carriers ?? []" :key="`${c.name}-${c.option}`" :text="`${c.name} · ${c.option}`" readonly color="grey" />
           <span class="os-text-secondary">{{ t('zones') }} :</span>
           <OsTag v-for="z in data.entry.config.delivery_zone_ids ?? []" :key="z" :text="zoneName(z)" readonly color="blue" />
         </div>
-        <div class="priorities">
+        <div v-if="display.config" class="priorities">
           <span class="os-body-l">{{ t('prioritiesTitle') }}</span>
           <ol class="os-body-s">
             <li v-for="(c, k) in sortOrder.sort_criterias ?? []" :key="k">
@@ -279,7 +279,7 @@ function chainLegs(a: SchemaAnalysis) {
         </div>
       </section>
 
-      <OsCollapse v-if="data.entry.config" v-model="configOpen">
+      <OsCollapse v-if="display.config && data.entry.config" v-model="configOpen">
         <template #header><span class="os-body-l">{{ t('configRaw') }}</span></template>
         <template #content><pre class="raw">{{ JSON.stringify(data.entry.config, null, 2) }}</pre></template>
       </OsCollapse>
