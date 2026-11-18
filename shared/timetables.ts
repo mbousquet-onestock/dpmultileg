@@ -21,6 +21,36 @@ export interface Timetable {
   name?: string;
   type?: string;
   hours?: { timezone?: string; timespans?: Timespan[] };
+  /** Version currently in force (GET /timetables/{id}, fields: current_timetable). */
+  current_timetable?: unknown;
+  /** Routes using this timetable (GET /timetables/{id}, fields: routes): ids or objects with an id. */
+  routes?: unknown;
+}
+
+/**
+ * Normalize a timetable returned by GET /timetables/{id}: slots taken from `current_timetable` (version in force)
+ * when present, else from `hours`; `routes` turned into a list of route ids.
+ */
+export function normalizeTimetable(raw: unknown, fallbackId?: string): Timetable | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = ((raw as Record<string, unknown>).timetable ?? raw) as Record<string, unknown>;
+  const id = String(o.id ?? o._id ?? fallbackId ?? '');
+  if (!id) return undefined;
+  const current = o.current_timetable as Record<string, unknown> | undefined;
+  const pickHours = (x: unknown): Timetable['hours'] | undefined => {
+    if (!x || typeof x !== 'object') return undefined;
+    const h = x as Record<string, unknown>;
+    if (Array.isArray(h.timespans)) return h as Timetable['hours'];
+    if (h.hours && typeof h.hours === 'object') return pickHours(h.hours);
+    return undefined;
+  };
+  const hours = pickHours(current) ?? pickHours(o.hours) ?? pickHours(o);
+  const routes = Array.isArray(o.routes)
+    ? (o.routes as unknown[]).map((r) => (typeof r === 'string' ? r : r && typeof r === 'object' ? String((r as Record<string, unknown>).id ?? (r as Record<string, unknown>)._id ?? '') : '')).filter(Boolean)
+    : o.routes && typeof o.routes === 'object'
+      ? Object.keys(o.routes as object)
+      : undefined;
+  return { ...(o as object), id, name: (o.name as string) ?? (current?.name as string | undefined), type: (o.type as string) ?? (current?.type as string | undefined), hours, routes } as Timetable;
 }
 
 export interface ScheduledEvent {
@@ -68,6 +98,12 @@ function roleFromField(field: string): TimetableRole | undefined {
  */
 export function routeTimetables(route: DeliveryRoute, timetables: Map<string, Timetable>): Partial<Record<TimetableRole, Timetable>> {
   const result: Partial<Record<TimetableRole, Timetable>> = {};
+  // 1. timetables declaring the route in their `routes` (GET /timetables/{id}, fields: routes)
+  for (const tt of timetables.values()) {
+    const role = roleFromType(tt.type);
+    if (role && !result[role] && Array.isArray(tt.routes) && (tt.routes as string[]).includes(route.id)) result[role] = tt;
+  }
+  // 2. *_timetable_id fields of the route
   for (const [field, value] of Object.entries(route as unknown as Record<string, unknown>)) {
     if (!/timetable/i.test(field)) continue;
     const ids = Array.isArray(value) ? value : [value];

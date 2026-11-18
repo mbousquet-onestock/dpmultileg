@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { collectStockLines } from '../../shared/logistics.js';
-import type { ExecutionTime, ScheduledEvent, Timetable } from '../../shared/timetables.js';
+import { normalizeTimetable, type ExecutionTime, type ScheduledEvent, type Timetable } from '../../shared/timetables.js';
 import { asList } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
@@ -452,33 +452,47 @@ async function fetchCarrierTimetables(
   requestId?: string,
   extraIds: string[] = [],
 ): Promise<Timetable[]> {
+  // 1. list per type (ids, names, types: the list does not return the slots)
   const byId = new Map<string, Timetable>();
   for (const type of CARRIER_TIMETABLE_TYPES) {
     try {
-      const res = await callOnestock(t, 'GET', '/timetables', { filters: { type, fields: ['id', 'name', 'type', 'hours'] } });
+      const res = await callOnestock(t, 'GET', '/timetables', { filters: { type } });
       for (const tt of asList<Timetable>(res, 'timetables')) byId.set(tt.id, { ...tt, type: tt.type ?? type });
     } catch (e) {
       log('warn', 'optional_referential_unavailable', { request_id: requestId, path: `/timetables (${type})`, error: e instanceof Error ? e.message : String(e) });
     }
   }
-  const referenced = new Set<string>();
+  // timetables referenced by the routes / execution times but absent from the lists
   for (const r of routes)
     for (const [k, v] of Object.entries(r as unknown as Record<string, unknown>))
-      if (/timetable/i.test(k)) for (const id of Array.isArray(v) ? v : [v]) if (typeof id === 'string' && id) referenced.add(id);
-  for (const id of extraIds) referenced.add(id);
-  const missing = [...referenced].filter((id) => !byId.get(id)?.hours?.timespans).slice(0, 80);
-  await Promise.all(
-    missing.map(async (id) => {
-      try {
-        const res = (await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, { fields: ['id', 'name', 'type', 'hours'] })) as Record<string, unknown>;
-        const tt = (res?.timetable ?? res) as Timetable;
-        if (tt && typeof tt === 'object') byId.set(id, { ...byId.get(id), ...tt, id });
-      } catch (e) {
-        log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: e instanceof Error ? e.message : String(e) });
-      }
-    }),
-  );
-  return [...byId.values()];
+      if (/timetable/i.test(k)) for (const id of Array.isArray(v) ? v : [v]) if (typeof id === 'string' && id && !byId.has(id)) byId.set(id, { id });
+  for (const id of extraIds) if (!byId.has(id)) byId.set(id, { id });
+
+  // 2. detail of each timetable: slots (hours / current_timetable) and routes using it
+  const ids = [...byId.keys()].slice(0, 200);
+  for (let i = 0; i < ids.length; i += 10) {
+    await Promise.all(
+      ids.slice(i, i + 10).map(async (id) => {
+        try {
+          const res = await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, {
+            fields: ['id', 'name', 'type', 'hours', 'current_timetable', 'routes'],
+          });
+          const tt = normalizeTimetable(res, id);
+          if (tt) byId.set(id, { ...byId.get(id), ...tt, type: tt.type ?? byId.get(id)?.type });
+        } catch (e) {
+          log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: e instanceof Error ? e.message : String(e) });
+        }
+      }),
+    );
+  }
+  const list = [...byId.values()];
+  log('info', 'timetables_loaded', {
+    request_id: requestId,
+    count: list.length,
+    with_slots: list.filter((x) => x.hours?.timespans?.length).length,
+    linked_to_routes: list.filter((x) => Array.isArray(x.routes) && x.routes.length).length,
+  });
+  return list;
 }
 
 async function fetchEndpoints(t: { site_id: string; environment: string; api_url: string }, filter: Record<string, unknown>, start = 0): Promise<Endpoint[]> {

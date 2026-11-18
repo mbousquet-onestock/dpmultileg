@@ -366,6 +366,14 @@ const isStoreToStoreOnly = (s: { legs: { route: DeliveryRoute }[] }) => s.legs.l
 
 export function mockOnestock(method: string, path: string, body: Record<string, unknown>): unknown {
   const p = path.split('?')[0];
+  const ttDetail = p.match(/^\/timetables\/(.+)$/);
+  if (ttDetail) {
+    const tt = mockTimetables.find((x) => x.id === decodeURIComponent(ttDetail[1]));
+    if (!tt) throw new Error('mock: timetable not found');
+    // Same shape as OneStock with fields current_timetable / routes
+    const routes = mockRoutes.filter((r) => Object.entries(r).some(([k, v]) => /timetable/.test(k) && v === tt.id)).map((r) => r.id);
+    return { timetable: { id: tt.id, name: tt.name, type: tt.type, current_timetable: { hours: tt.hours }, routes } };
+  }
   if (method !== 'GET') throw new Error(`mock: ${method} ${p} not supported`);
   switch (p) {
     case '/delivery_configs':
