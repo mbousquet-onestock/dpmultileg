@@ -6,7 +6,13 @@ import { t } from '../i18n';
 import { loadReferential, state } from '../store';
 
 const report = computed(() => state.referential?.load_report ?? []);
-const failed = computed(() => report.value.filter((r) => !r.ok || r.count === 0));
+/** Blocking issues: a required step failed, returned nothing, or some referenced ids are missing. */
+const failed = computed(() => report.value.filter((r) => !r.optional && (!r.ok || r.count === 0 || r.partial)));
+function status(r: (typeof report.value)[number]) {
+  if (!r.ok) return r.optional ? { text: t('loadOptionalKo'), color: 'grey' } : { text: 'KO', color: 'red' };
+  if (r.count === 0) return r.optional ? { text: '0', color: 'grey' } : { text: '0', color: 'orange' };
+  return { text: String(r.count), color: r.partial ? 'orange' : 'green' };
+}
 const open = ref(false);
 const reloading = ref(false);
 
@@ -43,13 +49,17 @@ async function reload() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in report" :key="r.step" :class="{ ko: !r.ok, empty: r.ok && r.count === 0 }">
+            <tr v-for="r in report" :key="r.step" :class="{ ko: !r.ok && !r.optional, empty: !r.optional && r.ok && (r.count === 0 || r.partial), optional: r.optional && (!r.ok || r.count === 0) }">
               <td>{{ r.step }}</td>
               <td class="mono">{{ r.path }}</td>
               <td>
-                <OsBadge :text="r.ok ? String(r.count) : 'KO'" :color="!r.ok ? 'red' : r.count === 0 ? 'orange' : 'green'" />
+                <OsBadge :text="status(r).text" :color="status(r).color" />
               </td>
-              <td>{{ r.error ?? r.detail ?? '' }} <span class="os-text-secondary">· {{ r.ms }} ms</span></td>
+              <td>
+                {{ r.error ?? r.detail ?? '' }}
+                <span v-if="r.optional && (!r.ok || r.count === 0)" class="os-text-secondary"> ({{ t('loadOptional') }})</span>
+                <span class="os-text-secondary">· {{ r.ms }} ms</span>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -70,6 +80,7 @@ th { text-align: left; font-weight: 500; color: var(--os-text-secondary); paddin
 td { padding: 6px 8px; border-bottom: 1px solid var(--os-neutral-50); vertical-align: top; }
 tr.ko td { background: var(--os-red-t-100); }
 tr.empty td { background: var(--os-orange-t-100); }
+tr.optional td { color: var(--os-text-secondary); }
 .mono { font-family: ui-monospace, monospace; font-size: 11px; white-space: nowrap; }
 .actions { display: flex; justify-content: flex-end; padding: 8px 0; }
 </style>

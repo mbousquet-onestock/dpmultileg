@@ -385,21 +385,36 @@ interface LoadStep {
   ms: number;
   detail?: string;
   error?: string;
+  /** Optional data: an empty result or missing rights do not prevent the computation. */
+  optional?: boolean;
+  /** Some referenced ids could not be loaded. */
+  partial?: boolean;
 }
 
 type Target = { site_id: string; environment: string; api_url: string };
 
 async function loadReferential(t: Target, requestId?: string) {
   const report: LoadStep[] = [];
-  const step = async <T>(name: string, path: string, fn: () => Promise<T[]>, detail?: (v: T[]) => string): Promise<T[]> => {
+  const errors = new Map<string, string[]>();
+  const step = async <T>(name: string, path: string, fn: () => Promise<T[]>, detail?: (v: T[]) => string, optional = false): Promise<T[]> => {
     const started = Date.now();
     try {
       const value = await fn();
-      report.push({ step: name, path, ok: true, count: value.length, ms: Date.now() - started, detail: detail?.(value) });
+      const errs = errors.get(name) ?? [];
+      report.push({
+        step: name,
+        path,
+        ok: true,
+        count: value.length,
+        ms: Date.now() - started,
+        detail: [detail?.(value), errs.length ? `errors: ${[...new Set(errs)].slice(0, 3).join(' | ')}` : ''].filter(Boolean).join(' · ') || undefined,
+        optional,
+        partial: errs.length > 0,
+      });
       return value;
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
-      report.push({ step: name, path, ok: false, count: 0, ms: Date.now() - started, error });
+      report.push({ step: name, path, ok: false, count: 0, ms: Date.now() - started, error, optional });
       log('warn', 'referential_step_failed', { request_id: requestId, step: name, path, error });
       return [];
     }
@@ -428,7 +443,13 @@ async function loadReferential(t: Target, requestId?: string) {
       const missing = [...wanted].filter((z) => !zs.some((x) => x.id === z));
       return missing.length ? `zones of the configurations not found: ${missing.join(', ')}` : '';
     }),
-    step('sales_channels', 'GET /sales_channels', async () => asList<SalesChannel>(await callOnestock(t, 'GET', '/sales_channels'), 'sales_channels', 'sales_channel')),
+    step(
+      'sales_channels',
+      'GET /sales_channels',
+      async () => asList<SalesChannel>(await callOnestock(t, 'GET', '/sales_channels'), 'sales_channels', 'sales_channel'),
+      undefined,
+      true,
+    ),
   ]);
   const endpoints = await step('endpoints', 'GET /endpoints', async () => {
     const all: Endpoint[] = [];
@@ -459,7 +480,9 @@ async function loadReferential(t: Target, requestId?: string) {
           const o = (res?.execution_time ?? res) as ExecutionTime;
           return o && typeof o === 'object' ? { ...o, id: String(o.id ?? (o as unknown as Record<string, unknown>)._id ?? id) } : undefined;
         } catch (e) {
-          log('warn', 'execution_time_unavailable', { request_id: requestId, id, error: e instanceof Error ? e.message : String(e) });
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.set('execution_times', [...(errors.get('execution_times') ?? []), msg]);
+          log('warn', 'execution_time_unavailable', { request_id: requestId, id, error: msg });
           return undefined;
         }
       });
@@ -502,7 +525,9 @@ async function loadReferential(t: Target, requestId?: string) {
           const res = await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, { fields: ['id', 'name', 'type', 'hours', 'current_timetable', 'routes'] });
           return normalizeTimetable(res, id);
         } catch (e) {
-          log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: e instanceof Error ? e.message : String(e) });
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.set('timetables', [...(errors.get('timetables') ?? []), msg]);
+          log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: msg });
           return undefined;
         }
       }),
@@ -524,12 +549,20 @@ async function loadReferential(t: Target, requestId?: string) {
   // Optional: priorities, restrictions, closures
   const now = Math.floor(Date.now() / 1000);
   const [sortOrders, restrictions, scheduledEvents] = await Promise.all([
-    step('sort_orders', 'GET /sort_orders', async () => asList<SortOrder>(await callOnestock(t, 'GET', '/sort_orders'), 'sort_orders')),
-    step('delivery_restrictions', 'GET /delivery_restrictions', async () =>
-      asList<DeliveryRestriction>(await callOnestock(t, 'GET', '/delivery_restrictions'), 'delivery_restrictions'),
+    step('sort_orders', 'GET /sort_orders', async () => asList<SortOrder>(await callOnestock(t, 'GET', '/sort_orders'), 'sort_orders'), undefined, true),
+    step(
+      'delivery_restrictions',
+      'GET /delivery_restrictions',
+      async () => asList<DeliveryRestriction>(await callOnestock(t, 'GET', '/delivery_restrictions'), 'delivery_restrictions'),
+      undefined,
+      true,
     ),
-    step('scheduled_events', 'GET /scheduledevents', async () =>
-      asList<ScheduledEvent>(await callOnestock(t, 'GET', '/scheduledevents', { filters: { from: now - 86400, to: now + 60 * 86400 } }), 'scheduled_events'),
+    step(
+      'scheduled_events',
+      'GET /scheduledevents',
+      async () => asList<ScheduledEvent>(await callOnestock(t, 'GET', '/scheduledevents', { filters: { from: now - 86400, to: now + 60 * 86400 } }), 'scheduled_events'),
+      undefined,
+      true,
     ),
   ]);
 

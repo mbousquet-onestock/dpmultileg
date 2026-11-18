@@ -1,3 +1,5 @@
+import http from 'node:http';
+import https from 'node:https';
 import { config } from './config.js';
 import { getCredential } from './credentials.js';
 import { log } from './logger.js';
@@ -30,38 +32,61 @@ interface Target {
 const tokens = new Map<string, Promise<string>>();
 const cacheKey = (t: Target) => `${t.site_id}|${t.environment}|${t.api_url}`;
 
+/**
+ * HTTP call with node:http(s), which (unlike fetch) can send a body with a GET request.
+ * OneStock GET routes take their parameters in a JSON body (like Postman does); the POST +
+ * X-HTTP-Method-Override fallback is not accepted by every route (e.g. GET /timetables/{id}).
+ */
+function httpCall(url: string, method: string, body: string | undefined, timeoutMs = 30_000): Promise<{ status: number; requestId?: string; text: string }> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === 'http:' ? http : https;
+    const req = lib.request(
+      u,
+      {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          ...(body !== undefined ? { 'Content-Length': Buffer.byteLength(body) } : {}),
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () =>
+          resolve({ status: res.statusCode ?? 0, requestId: (res.headers['request-id'] as string | undefined) ?? undefined, text: Buffer.concat(chunks).toString('utf8') }),
+        );
+        res.on('error', reject);
+      },
+    );
+    req.on('timeout', () => req.destroy(new Error(`timeout after ${timeoutMs} ms`)));
+    req.on('error', reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+
 async function rawCall(apiUrl: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body: unknown): Promise<unknown> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' };
-  let httpMethod: string = method;
-  if (method === 'GET') {
-    // fetch() can't send a body with GET: OneStock supports POST + method override.
-    httpMethod = 'POST';
-    headers['X-HTTP-Method-Override'] = 'GET';
-  }
   const started = Date.now();
-  let res: Response;
+  let res: { status: number; requestId?: string; text: string };
   try {
-    res = await fetch(`${apiUrl}${path}`, {
-      method: httpMethod,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
+    res = await httpCall(`${apiUrl}${path}`, method, body === undefined ? undefined : JSON.stringify(body));
   } catch (e) {
     const cause = e instanceof Error ? ((e.cause as Error | undefined)?.message ?? e.message) : String(e);
     log('error', 'onestock_unreachable', { api_host: new URL(apiUrl).host, path, ms: Date.now() - started, error: cause });
     throw new OnestockError(502, { error: 'unreachable', cause }, `OneStock API unreachable (${new URL(apiUrl).host}${path}): ${cause}`, path);
   }
-  const requestId = res.headers.get('request-id') ?? undefined;
-  log(res.ok ? 'debug' : 'warn', 'onestock_call', { api_host: new URL(apiUrl).host, method, path, status: res.status, ms: Date.now() - started, onestock_request_id: requestId });
-  const text = await res.text();
+  const ok = res.status >= 200 && res.status < 300;
+  log(ok ? 'debug' : 'warn', 'onestock_call', { api_host: new URL(apiUrl).host, method, path, status: res.status, ms: Date.now() - started, onestock_request_id: res.requestId });
   let json: unknown = undefined;
   try {
-    json = text ? JSON.parse(text) : undefined;
+    json = res.text ? JSON.parse(res.text) : undefined;
   } catch {
-    json = text;
+    json = res.text;
   }
-  if (!res.ok) throw new OnestockError(res.status, json, undefined, path, requestId);
+  if (!ok) throw new OnestockError(res.status, json, undefined, path, res.requestId);
   return json;
 }
 

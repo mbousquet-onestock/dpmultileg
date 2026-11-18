@@ -12,7 +12,7 @@ export interface Referential {
   timetables?: Timetable[];
   scheduled_events?: ScheduledEvent[];
   execution_times?: ExecutionTime[];
-  load_report?: { step: string; path: string; ok: boolean; count: number; ms: number; detail?: string; error?: string }[];
+  load_report?: { step: string; path: string; ok: boolean; count: number; ms: number; detail?: string; error?: string; optional?: boolean; partial?: boolean }[];
 }
 
 export interface SessionInfo {
