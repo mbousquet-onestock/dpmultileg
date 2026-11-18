@@ -389,7 +389,13 @@ export function executionTimeFor(
   ctx: OperationsContext,
 ): { id?: string; et?: ExecutionTime; hours: number; unknown: boolean } {
   const ref = endpoint?.execution_times?.find((e) => e.operation === op)?.id ?? (config.global_execution_times as Record<string, string> | undefined)?.[op];
-  const et = ref ? ctx.executionTimes.get(ref) : undefined;
+  // by id (id / _id / public_id), else by operation name (the list may expose other ids than the configuration)
+  const all = [...ctx.executionTimes.values()];
+  const anyId = (e: ExecutionTime) => [e.id, (e as unknown as Record<string, unknown>)._id, (e as unknown as Record<string, unknown>).public_id].map((x) => (x === undefined ? undefined : String(x)));
+  const et =
+    (ref ? (ctx.executionTimes.get(ref) ?? all.find((e) => anyId(e).includes(ref))) : undefined) ??
+    all.find((e) => e.operation === op && (!e.execution_moment || e.execution_moment === undefined)) ??
+    all.find((e) => e.operation === op);
   if (et) return { id: et.id, et, hours: parseDurationHours(et.duration), unknown: false };
   const hours = parseDurationHours(ref);
   // an id that could not be loaded (not a duration written in place): unknown duration, counted as 0

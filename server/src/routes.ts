@@ -525,8 +525,8 @@ async function loadReferential(t: Target, requestId?: string) {
   const timetables = await step(
     'timetables',
     `GET /timetables/{id} (${ttIds.length})`,
-    async () =>
-      inBatches(ttIds.slice(0, 200), async (id) => {
+    async () => {
+      const detailed = await inBatches(ttIds.slice(0, 200), async (id) => {
         try {
           const res = await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, { fields: ['id', 'name', 'type', 'hours', 'current_timetable', 'routes'] });
           return normalizeTimetable(res, id);
@@ -536,7 +536,30 @@ async function loadReferential(t: Target, requestId?: string) {
           log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: msg });
           return undefined;
         }
-      }),
+      });
+      // Fallback when the detail is not allowed (403): list per type, asking for the slots.
+      const missing = ttIds.filter((id) => !detailed.some((x) => x.id === id && x.hours?.timespans?.length));
+      if (missing.length) {
+        for (const type of ['carrier_pickup_timetable', 'carrier_transit_timetable', 'carrier_delivery_timetable', 'execution_time_timetable']) {
+          try {
+            const res = await callOnestock(t, 'GET', '/timetables', { filters: { type, fields: ['id', 'name', 'type', 'hours', 'current_timetable'] } });
+            const raw = (res as Record<string, unknown>)?.timetables;
+            for (const x of Array.isArray(raw) ? raw : []) {
+              const tt = normalizeTimetable({ timetable: x });
+              if (!tt || !missing.includes(tt.id)) continue;
+              const i = detailed.findIndex((d) => d.id === tt.id);
+              if (i >= 0) detailed[i] = { ...detailed[i], ...tt, hours: tt.hours ?? detailed[i].hours };
+              else detailed.push({ ...tt, type: tt.type ?? type });
+            }
+          } catch (e) {
+            errors.set('timetables', [...(errors.get('timetables') ?? []), e instanceof Error ? e.message : String(e)]);
+          }
+        }
+        const stillMissing = ttIds.filter((id) => !detailed.some((x) => x.id === id && x.hours?.timespans?.length));
+        if (stillMissing.length < missing.length) errors.set('timetables', [`detail not allowed, slots read from GET /timetables (${missing.length - stillMissing.length}/${missing.length})`]);
+      }
+      return detailed;
+    },
     (tts) => {
       const byType = new Map<string, number>();
       for (const x of tts) byType.set(x.type ?? '?', (byType.get(x.type ?? '?') ?? 0) + 1);

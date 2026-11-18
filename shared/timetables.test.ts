@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mockRoutes, mockScheduledEvents, mockTimetables } from '../server/src/mock.js';
-import { Calendar, closuresFor, normalizeTimetable, routeTimetables, secondsInWeek, timeLegs, type Timetable } from './timetables.js';
+import { Calendar, closuresFor, executionTimeFor, normalizeTimetable, routeTimetables, secondsInWeek, timeLegs, type ExecutionTime, type Timetable } from './timetables.js';
 
 const timetables = new Map<string, Timetable>(mockTimetables.map((t) => [t.id, t]));
 const route = (id: string) => mockRoutes.find((r) => r.id === id)!;
@@ -193,5 +193,24 @@ describe('real Colissimo timetables chained (pickup -> transit Mon-Sat -> delive
     // max 48h: 11h Saturday + 24h Monday + 13h Tuesday -> Tuesday 13:00, end of the slot = 18:00
     expect(Math.abs(slow.arrival - (saturday13 + (11 + 24 + 24 + 13) * H))).toBeLessThanOrEqual(1);
     expect(slow.delivered).toBe(saturday13 + (11 + 24 + 24 + 18) * H + 1); // Tuesday 18:00:01
+  });
+});
+
+describe('execution times read from the list (detail not allowed)', () => {
+  const config = { id: 'std', delivery_method: 'standard', operations: { always_at_start: ['Paiement'] }, global_execution_times: { Paiement: '67e555fb420e158b6d604834' } };
+  const ctx = (list: ExecutionTime[]) => ({ timetables: new Map(), events: [], executionTimes: new Map(list.map((e) => [e.id, e])) });
+
+  it('matches the configuration id on _id / public_id', () => {
+    const et = { id: 'paiement_1h', _id: '67e555fb420e158b6d604834', operation: 'Paiement', duration: '1h' } as ExecutionTime;
+    expect(executionTimeFor('Paiement', config, undefined, ctx([et]))).toMatchObject({ hours: 1, unknown: false });
+  });
+
+  it('falls back on the operation name', () => {
+    const et = { id: 'other_id', operation: 'Paiement', duration: '1h' } as ExecutionTime;
+    expect(executionTimeFor('Paiement', config, undefined, ctx([et]))).toMatchObject({ hours: 1, unknown: false });
+  });
+
+  it('flags the duration as unknown when nothing matches', () => {
+    expect(executionTimeFor('Paiement', config, undefined, ctx([]))).toMatchObject({ hours: 0, unknown: true });
   });
 });
