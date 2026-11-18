@@ -575,25 +575,11 @@ async function loadReferential(t: Target, requestId?: string) {
     },
   );
 
-  // Optional: priorities, restrictions, closures
-  const now = Math.floor(Date.now() / 1000);
-  const [sortOrders, restrictions, scheduledEvents] = await Promise.all([
-    step('sort_orders', 'GET /sort_orders', async () => asList<SortOrder>(await callOnestock(t, 'GET', '/sort_orders'), 'sort_orders'), undefined, true),
-    step(
-      'delivery_restrictions',
-      'GET /delivery_restrictions',
-      async () => asList<DeliveryRestriction>(await callOnestock(t, 'GET', '/delivery_restrictions'), 'delivery_restrictions'),
-      undefined,
-      true,
-    ),
-    step(
-      'scheduled_events',
-      'GET /scheduledevents',
-      async () => asList<ScheduledEvent>(await callOnestock(t, 'GET', '/scheduledevents', { filters: { from: now - 86400, to: now + 60 * 86400 } }), 'scheduled_events'),
-      undefined,
-      true,
-    ),
-  ]);
+  // Priorities (sort orders), carrier restrictions and scheduled events are not loaded: the priorities come
+  // from the configuration when present, else the OneStock default rule (the fastest, end of delivery slot).
+  const sortOrders: SortOrder[] = [];
+  const restrictions: DeliveryRestriction[] = [];
+  const scheduledEvents: ScheduledEvent[] = [];
 
   log('info', 'referential_loaded', { request_id: requestId, steps: report.map((r) => `${r.step}:${r.ok ? r.count : 'KO'}`).join(' ') });
   return {
