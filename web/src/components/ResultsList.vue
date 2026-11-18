@@ -2,7 +2,7 @@
 import { OsBadge, OsIcon, OsPicto } from '@onestock-public/design-system';
 import { shipmentsFromPromise, isClickAndCollect } from '@shared/logistics';
 import type { PromiseOption } from '@shared/types';
-import { formatDate, formatMoney, t } from '../i18n';
+import { formatMoney, formatRange, t } from '../i18n';
 import { currency, state, zoneCtx } from '../store';
 
 function statusColor(o: PromiseOption) {
@@ -38,7 +38,7 @@ function legsCount(o: PromiseOption): number {
         <template v-if="entry.option.status !== 'none'">
           <span class="os-label-s eta">
             <OsIcon icon="calendar" size="xs" color="secondary" />
-            {{ formatDate(entry.option.eta_start) }} → {{ formatDate(entry.option.eta_end) }}
+            {{ formatRange(entry.option.eta_start, entry.option.eta_end) }}
           </span>
           <div class="facts os-body-s os-text-secondary">
             <span v-if="entry.option.cost !== undefined">{{ t('cost') }} {{ formatMoney(entry.option.cost, currency) }}</span>

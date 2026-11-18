@@ -531,6 +531,21 @@ export function formatDate(ts?: number): string {
   }
 }
 
+/** Delivery window "from -> to"; same day: "Fri 20 Nov, 08:00 – 18:00". */
+export function formatRange(from?: number, to?: number): string {
+  if (!from || !to || from === to) return formatDate(to ?? from);
+  try {
+    const day = (ts: number) => new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: '2-digit', day: '2-digit', timeZone: timezone.value }).format(new Date(ts * 1000));
+    if (day(from) === day(to)) {
+      const time = new Intl.DateTimeFormat(locale.value, { hour: '2-digit', minute: '2-digit', timeZone: timezone.value }).format(new Date(to * 1000));
+      return `${formatDate(from)} – ${time}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return `${formatDate(from)} → ${formatDate(to)}`;
+}
+
 export function formatMoney(n: number | undefined, currency = 'EUR'): string {
   if (n === undefined) return '';
   try {

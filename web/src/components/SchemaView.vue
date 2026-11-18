@@ -8,7 +8,7 @@ import { criterionKind, formatHours, prioritiesFor, settingsPriorities, type Log
 import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
 import type { OperationTiming } from '@shared/timetables';
 import { computed, ref } from 'vue';
-import { formatDate, formatMoney, t } from '../i18n';
+import { formatDate, formatMoney, formatRange, t } from '../i18n';
 import { currency, destination, display, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
 import SchemaChain from './SchemaChain.vue';
 
@@ -190,7 +190,7 @@ function chainLegs(a: SchemaAnalysis) {
         <div class="kpis" v-if="option.status !== 'none'">
           <div class="kpi">
             <span class="os-body-m os-text-secondary">{{ t('eta') }}</span>
-            <span class="os-label-l">{{ formatDate(option.eta_end) }}</span>
+            <span class="os-label-l">{{ formatRange(option.eta_start, option.eta_end) }}</span>
           </div>
           <div v-if="option.cutoff" class="kpi">
             <span class="os-body-m os-text-secondary">{{ t('cutoff') }}</span>
@@ -261,7 +261,7 @@ function chainLegs(a: SchemaAnalysis) {
           <div class="theo-head os-body-s os-text-secondary">
             <span>
               #{{ row.number }} · {{ row.a.schema.legs.length }} {{ row.a.schema.legs.length > 1 ? t('legs') : t('leg') }} · {{ t('transit') }}
-              {{ transit(row.a.schema) }} · {{ t('eta') }} {{ formatDate(row.a.eta_end) }}
+              {{ transit(row.a.schema) }} · {{ t('eta') }} {{ formatRange(row.a.eta_start, row.a.eta_end) }}
             </span>
             <span class="badges">
               <OsBadge
