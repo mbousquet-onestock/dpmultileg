@@ -156,3 +156,42 @@ describe('GET /timetables/{id} execution_time_timetable "France" (open 24/7)', (
     expect(cal.advance(SUNDAY_23H, 2)).toBe(SUNDAY_23H + 2 * H);
   });
 });
+
+describe('real Colissimo timetables chained (pickup -> transit Mon-Sat -> delivery)', () => {
+  const tz = 'Europe/Paris';
+  const make = (id: string, type: string, timespans: { start: number; end: number }[]) =>
+    normalizeTimetable({ timetable: { id, name: 'Colissimo', type, current_timetable: { timezone: tz, timespans: timespans.map((x) => ({ ...x, options: { open: true } })) } } })!;
+  const pickup = make('pickup', 'carrier_pickup_timetable', [43200, 68400, 129600, 154800, 216000, 241200, 302400, 327600, 385200, 406800, 478800].map((v) => ({ start: v, end: v + 1 })));
+  const transit = make('transit', 'carrier_transit_timetable', [{ start: 0, end: 518399 }]);
+  const delivery = make('delivery', 'carrier_delivery_timetable', [
+    { start: 28800, end: 64801 },
+    { start: 115200, end: 151201 },
+    { start: 201600, end: 237601 },
+    { start: 288000, end: 324001 },
+    { start: 374400, end: 410401 },
+    { start: 460800, end: 478801 },
+  ]);
+  const colissimo = { id: 'r_colissimo', carrier: { name: 'colissimo', option: 'home' }, minimum_transit_hours: 24, maximum_transit_hours: 48 };
+  const timetables = new Map<string, Timetable>([pickup, transit, delivery].map((tt) => [tt.id, { ...tt, routes: ['r_colissimo'] }]));
+
+  it('trucks do not run on Sunday', () => {
+    const SATURDAY_12H = FRIDAY_18H + 18 * H;
+    // 24h of transit from Saturday 12:00: 12h on Saturday, nothing on Sunday, 12h on Monday -> Monday 12:00
+    // (OneStock spans end at 23:59:59: 1 second tolerance)
+    expect(Math.abs(new Calendar(transit).advance(SATURDAY_12H, 24)! - (SATURDAY_12H + (12 + 24 + 12) * H))).toBeLessThanOrEqual(1);
+  });
+
+  it('ready Friday 18:00: pickup Saturday 13:00, delivered Monday (min) to Tuesday end of slot (max)', () => {
+    const ctx = { timetables, events: [] };
+    const fast = timeLegs([colissimo], FRIDAY_18H, 'min', ctx)![0];
+    const slow = timeLegs([colissimo], FRIDAY_18H, 'max', ctx)![0];
+    const saturday13 = FRIDAY_18H + 19 * H;
+    expect(fast.pickup?.start).toBe(saturday13);
+    // min 24h: 11h on Saturday + 13h on Monday -> Monday 13:00, inside the 8h-18h slot
+    expect(Math.abs(fast.arrival - (saturday13 + (11 + 24 + 13) * H))).toBeLessThanOrEqual(1);
+    expect(fast.delivered).toBe(fast.arrival);
+    // max 48h: 11h Saturday + 24h Monday + 13h Tuesday -> Tuesday 13:00, end of the slot = 18:00
+    expect(Math.abs(slow.arrival - (saturday13 + (11 + 24 + 24 + 13) * H))).toBeLessThanOrEqual(1);
+    expect(slow.delivered).toBe(saturday13 + (11 + 24 + 24 + 18) * H + 1); // Tuesday 18:00:01
+  });
+});
