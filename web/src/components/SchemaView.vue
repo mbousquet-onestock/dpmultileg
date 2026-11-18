@@ -9,7 +9,7 @@ import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
 import type { OperationTiming } from '@shared/timetables';
 import { computed, ref } from 'vue';
 import { formatDate, formatMoney, t } from '../i18n';
-import { currency, destination, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
+import { currency, destination, display, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
 import SchemaChain from './SchemaChain.vue';
 
 const data = computed(() => selectedSchemas.value);
@@ -267,10 +267,10 @@ function chainLegs(a: SchemaAnalysis) {
             </span>
           </div>
           <SchemaChain :legs="chainLegs(row.a)" :destination="dest" compact />
-          <ul v-if="row.a.timeline?.length || row.a.operations?.length" class="timeline os-body-s">
+          <ul v-if="display.timeline && (row.a.timeline?.length || row.a.operations?.length)" class="timeline os-body-s">
             <li v-for="(line, k) in timelineLines(row.a)" :key="k"><OsIcon icon="time" size="xs" /> <span>{{ line }}</span></li>
           </ul>
-          <ul v-if="row.reasons.length" class="reasons">
+          <ul v-if="display.reasons && row.reasons.length" class="reasons">
             <li v-for="(r, k) in row.reasons" :key="k" class="os-body-s" :class="r.ok === true ? 'ok' : r.ok === false ? 'ko' : 'info'">
               <OsIcon :icon="r.ok === true ? 'check-circle-outline' : r.ok === false ? 'close-circle-outline' : 'info-outline'" size="xs" />
               <span>{{ r.text }}</span>

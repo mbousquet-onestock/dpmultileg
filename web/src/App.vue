@@ -12,7 +12,7 @@ import LoadReport from './components/LoadReport.vue';
 import StandaloneConnect from './components/StandaloneConnect.vue';
 import { autoResize, handshake, isEmbedded, readParams } from './extension';
 import { setLocale, t } from './i18n';
-import { canRun, destination, loadReferential, runTest, salesChannels, state } from './store';
+import { canRun, destination, display, loadReferential, runTest, salesChannels, state } from './store';
 
 const params = readParams();
 setLocale(params.lang ?? navigator.language, params.locale, params.timezone);
@@ -161,7 +161,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
 
     <ErrorPanel v-else-if="phase === 'error'" :error="error" :step="step" :context="context" @configure="openConfig" />
 
-    <LoadReport v-if="phase === 'ready'" />
+    <LoadReport v-if="phase === 'ready' && display.loadReport" />
     <div v-if="phase === 'ready'" class="layout">
       <div class="form">
         <section>

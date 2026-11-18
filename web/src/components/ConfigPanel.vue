@@ -3,10 +3,11 @@
  * Hidden "API configuration" tab: stores the OneStock API user/password (and extension secret) used to generate
  * tokens for a site/environment. Protected by the server ADMIN_TOKEN; passwords are never sent back to the browser.
  */
-import { OsAlert, OsBadge, OsButton, OsCardLayout, OsDivider, OsEntity, OsInputText, OsPicto } from '@onestock-public/design-system';
+import { OsAlert, OsBadge, OsButton, OsCardLayout, OsCheckbox, OsDivider, OsEntity, OsInputText, OsPicto } from '@onestock-public/design-system';
 import { computed, onMounted, ref, watch } from 'vue';
 import { adminApi, api, ApiError, type CredentialSummary } from '../api';
 import { t } from '../i18n';
+import { display } from '../store';
 
 const props = defineProps<{ siteId?: string; environment?: string; handshakeApiUrl?: string; signedSite?: string }>();
 const emit = defineEmits<{ saved: [{ site_id: string; environment: string }] }>();
@@ -153,6 +154,23 @@ onMounted(async () => {
     <OsCardLayout>
       <div class="block">
         <div class="head">
+          <OsPicto icon="eye" />
+          <div class="texts">
+            <span class="os-label-l">{{ t('displayTitle') }}</span>
+            <span class="os-label-s os-text-secondary">{{ t('displayHint') }}</span>
+          </div>
+        </div>
+        <div class="body checks">
+          <OsCheckbox v-model="display.loadReport" :label="t('displayLoadReport')" />
+          <OsCheckbox v-model="display.timeline" :label="t('displayTimeline')" />
+          <OsCheckbox v-model="display.reasons" :label="t('displayReasons')" />
+        </div>
+      </div>
+    </OsCardLayout>
+
+    <OsCardLayout>
+      <div class="block">
+        <div class="head">
           <OsPicto icon="key" />
           <div class="texts">
             <span class="os-label-l">{{ t('cfgTitle') }}</span>
@@ -244,6 +262,7 @@ onMounted(async () => {
 .texts .os-label-l, .block > .os-label-l { color: var(--os-text-primary); }
 .body { display: flex; flex-direction: column; gap: 16px; padding-left: 64px; }
 .field { max-width: 400px; }
+.checks { gap: 10px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
 .grid .wide { grid-column: 1 / -1; }
 .actions { display: flex; gap: 8px; justify-content: flex-end; }

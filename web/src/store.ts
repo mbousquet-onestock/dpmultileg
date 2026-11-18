@@ -1,7 +1,7 @@
 import { deliveryMethods, type StockLine, type ZoneContext } from '@shared/logistics';
 import { candidateEndpoints, computePromise, type LocalPromiseOption } from '@shared/promise';
 import type { DeliveryConfig, Destination, Endpoint, Item } from '@shared/types';
-import { computed, reactive } from 'vue';
+import { computed, reactive, watch } from 'vue';
 import { api, type Referential } from './api';
 import { lang } from './i18n';
 
@@ -28,6 +28,27 @@ export const state = reactive({
   error: null as unknown,
   results: null as ResultEntry[] | null,
   selected: -1,
+});
+
+/* ---------------------------------------------------------------- display options (Configuration tab) */
+
+const DISPLAY_KEY = 'dpm.display';
+function readDisplay() {
+  try {
+    return JSON.parse(localStorage.getItem(DISPLAY_KEY) ?? '{}') as Partial<typeof defaults>;
+  } catch {
+    return {};
+  }
+}
+const defaults = { loadReport: false, timeline: false, reasons: false };
+/** What the delivery promise panel shows: hidden by default, enabled from the Configuration tab. */
+export const display = reactive({ ...defaults, ...readDisplay() });
+watch(display, (v) => {
+  try {
+    localStorage.setItem(DISPLAY_KEY, JSON.stringify(v));
+  } catch {
+    /* storage unavailable */
+  }
 });
 
 export const endpoints = computed<Endpoint[]>(() => {
