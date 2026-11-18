@@ -11,7 +11,14 @@ Une extension UI OneStock (`bo.page`) qui permet de :
    - `GET /delivery_restrictions` et les contraintes colis des routes, évaluées sur les caractéristiques des articles (catégories, poids, dimensions) ;
 4. **voir le schéma logistique** de chaque option : la ou les routes sélectionnées selon les priorités du mode (par exemple la plus rapide parmi celles qui ont le stock), et pour chaque autre schéma la raison pour laquelle il n'est pas retenu (pas de stock, restriction, contrainte colis, critère de priorité).
 
-**Algorithme** (`shared/promise.ts`) : pour chaque mode, l'extension prend la configuration correspondant à la destination, puis les schémas candidats. Elle exclut, par article, les schémas soumis à une restriction ou à une contrainte colis, puis vérifie le stock à l'origine. Les schémas restants sont classés selon les priorités : une seule expédition est privilégiée, puis la commande est éclatée dans la limite autorisée. La date estimée vaut l'heure de la demande (ou la date simulée), plus les opérations du mode, plus le transit. Les calendriers (enlèvement, ouverture, livraison) et les grilles de coûts ne sont pas évalués : c'est une estimation à partir de la configuration.
+**Algorithme** (`shared/promise.ts`) : pour chaque mode, l'extension prend la configuration correspondant à la destination, puis les schémas candidats. Elle exclut, par article, les schémas soumis à une restriction ou à une contrainte colis, puis vérifie le stock à l'origine. Les schémas restants sont classés selon les priorités : une seule expédition est privilégiée, puis la commande est éclatée dans la limite autorisée. La date estimée part de l'heure de la demande (ou de la date simulée), à laquelle s'ajoutent les opérations du mode, puis le calendrier de chaque route (`shared/timetables.ts`) :
+- `carrier_pickup_timetable` : le colis part au prochain créneau d'enlèvement ouvert, et la fin de ce créneau est le cutoff transporteur (« Commander avant ») ;
+- `carrier_transit_timetable` : les heures de transit ne s'écoulent que pendant les périodes où les camions roulent ;
+- `carrier_delivery_timetable` : la livraison a lieu dans le prochain créneau ouvert après l'arrivée. La date au plus tôt correspond au début de ce créneau, la date au plus tard à sa fin ;
+- les événements planifiés (`GET /scheduledevents`, `open: false`) ferment ces calendriers par transporteur, option et zone. Une fermeture du transit suspend aussi les enlèvements et les livraisons ;
+- en multi-leg, l'arrivée d'une étape devient l'heure de départ possible de l'étape suivante.
+
+Le lien entre une route et ses calendriers se fait par ses champs `*_timetable_id` (`pickup_timetable_id`, `delivery_timetable_id`, `opening_timetable_id`, etc.). Le rôle de chaque calendrier est déduit de son type. Les créneaux proviennent de `GET /timetables` (`filters.type` et `filters.fields: ["hours"]`), complété au besoin par `GET /timetables/{id}`. Le classement selon les priorités utilise cette date réelle. Restent non évalués : les grilles de coûts et le calendrier des opérations (`execution_time_timetable`).
 
 ![Schéma](docs/screenshot.png)
 

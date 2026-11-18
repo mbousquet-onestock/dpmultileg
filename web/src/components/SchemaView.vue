@@ -4,8 +4,8 @@
  * selected schema(s), then the other possible schemas with the reason they were not selected.
  */
 import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
-import { criterionKind, decisiveCriterion, formatHours, prioritiesFor, type LogisticSchema } from '@shared/logistics';
-import type { SchemaAnalysis } from '@shared/promise';
+import { criterionKind, formatHours, prioritiesFor, type LogisticSchema } from '@shared/logistics';
+import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
 import { computed, ref } from 'vue';
 import { formatDate, formatMoney, t } from '../i18n';
 import { currency, destination, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
@@ -34,7 +34,7 @@ function criterionLabel(field: string): string {
   return field;
 }
 function criterionFormat(field: string, v: number): string {
-  if (criterionKind(field) === 'time') return formatHours(v, v, units.value);
+  if (criterionKind(field) === 'time') return v > 1e9 ? formatDate(v) : formatHours(v, v, units.value);
   if (/cost|price|fee/i.test(field)) return formatMoney(v, currency.value);
   return String(Math.round(v * 100) / 100);
 }
@@ -56,7 +56,7 @@ const rows = computed<Row[]>(() => {
   const o = option.value;
   if (!o) return [];
   const analysis = o.analysis ?? [];
-  const selectedRef = analysis.find((a) => a.shipment === 0)?.schema;
+  const selectedRef = analysis.find((a) => a.shipment === 0);
   const first = sortOrder.value.sort_criterias?.[0];
   return analysis.map((a, i) => {
     const reasons: Reason[] = [];
@@ -76,7 +76,12 @@ const rows = computed<Row[]>(() => {
     const carried = selected ? new Set(a.shipments.flatMap((sh) => sh.lines.map((l) => l.item_id))) : undefined;
     for (const s of a.stock.filter((x) => !carried || carried.has(x.item_id))) {
       for (const e of a.exclusions.filter((x) => x.item_id === s.item_id && x.kind !== 'no_stock'))
-        reasons.push({ ok: false, text: t(e.kind === 'restriction' ? 'whyRestricted' : 'whyConstraintFailed').replace('{item}', itemLabel(s.item_id)).replace('{what}', e.text) });
+        reasons.push({
+          ok: false,
+          text: t(e.kind === 'restriction' ? 'whyRestricted' : e.kind === 'timetable' ? 'whyNoSlot' : 'whyConstraintFailed')
+            .replace('{item}', itemLabel(s.item_id))
+            .replace('{what}', e.text),
+        });
       if (o.stock_unverified) continue;
       if (s.endpoints.length) {
         const where = s.endpoints.map((e) => `${endpointName(e.id)} (${e.quantity})`).join(', ');
@@ -86,7 +91,7 @@ const rows = computed<Row[]>(() => {
       }
     }
     if (!selected && selectedRef && !a.exclusions.length) {
-      const d = decisiveCriterion(sortOrder.value, selectedRef, a.schema);
+      const d = decisiveBetween(sortOrder.value, selectedRef, a);
       if (d?.chosenBetter)
         reasons.push({
           ok: false,
@@ -103,6 +108,20 @@ const rows = computed<Row[]>(() => {
 });
 
 const sortedRows = computed(() => [...rows.value].sort((x, y) => Number(y.selected) - Number(x.selected) || x.number - y.number));
+
+/** Leg by leg timing with the carrier timetables. */
+function timelineLines(a: SchemaAnalysis): string[] {
+  return (a.timeline ?? []).map((tl, k) => {
+    const leg = a.schema.legs[k]?.route;
+    const carrier = leg ? `${leg.carrier.name} · ${leg.carrier.option}` : tl.route_id;
+    const parts: string[] = [];
+    if (tl.pickup) parts.push(t('tlPickup').replace('{at}', formatDate(tl.departure)).replace('{cutoff}', formatDate(tl.pickup.end)));
+    else parts.push(t('tlDeparture').replace('{at}', formatDate(tl.departure)));
+    parts.push(t('tlArrival').replace('{at}', formatDate(tl.arrival)) + (tl.transit_timetable ? ` (${tl.transit_timetable})` : ''));
+    if (tl.slot) parts.push(t('tlSlot').replace('{from}', formatDate(tl.slot.start)).replace('{to}', formatDate(tl.slot.end)));
+    return `${carrier} : ${parts.join(' → ')}`;
+  });
+}
 
 /** Legs of a schema with the promise route of the first leg (to highlight the shipping stock location). */
 function chainLegs(a: SchemaAnalysis) {
@@ -125,6 +144,10 @@ function chainLegs(a: SchemaAnalysis) {
           <div class="kpi">
             <span class="os-body-m os-text-secondary">{{ t('eta') }}</span>
             <span class="os-label-l">{{ formatDate(option.eta_end) }}</span>
+          </div>
+          <div v-if="option.cutoff" class="kpi">
+            <span class="os-body-m os-text-secondary">{{ t('cutoff') }}</span>
+            <span class="os-label-l">{{ formatDate(option.cutoff) }}</span>
           </div>
           <div v-if="option.cost !== undefined" class="kpi">
             <span class="os-body-m os-text-secondary">{{ t('cost') }}</span>
@@ -200,6 +223,9 @@ function chainLegs(a: SchemaAnalysis) {
             </span>
           </div>
           <SchemaChain :legs="chainLegs(row.a)" :destination="dest" compact />
+          <ul v-if="row.a.timeline?.length" class="timeline os-body-s">
+            <li v-for="(line, k) in timelineLines(row.a)" :key="k"><OsIcon icon="time" size="xs" /> <span>{{ line }}</span></li>
+          </ul>
           <ul v-if="row.reasons.length" class="reasons">
             <li v-for="(r, k) in row.reasons" :key="k" class="os-body-s" :class="r.ok === true ? 'ok' : r.ok === false ? 'ko' : 'info'">
               <OsIcon :icon="r.ok === true ? 'check-circle-outline' : r.ok === false ? 'close-circle-outline' : 'info-outline'" size="xs" />
@@ -244,5 +270,8 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .reasons .ko { color: var(--os-neutral-700); }
 .reasons .ko :deep(.os-icon) { color: var(--os-red-1000); }
 .reasons .info :deep(.os-icon) { color: var(--os-blue-1000); }
+.timeline { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; color: var(--os-neutral-700); }
+.timeline li { display: flex; gap: 6px; align-items: flex-start; }
+.timeline li :deep(.os-icon) { margin-top: 1px; color: var(--os-neutral-500); }
 .raw { margin: 0; max-height: 420px; overflow: auto; background: var(--os-neutral-30); border: 1px solid var(--os-border); border-radius: 5px; padding: 12px; font-size: 12px; }
 </style>

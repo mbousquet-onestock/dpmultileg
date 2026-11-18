@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mockConfigs, mockEndpoints, mockItems, mockRestrictions, mockRoutes, mockSortOrders, mockZones } from '../server/src/mock.js';
+import { mockConfigs, mockEndpoints, mockItems, mockRestrictions, mockRoutes, mockSortOrders, mockTimetables, mockZones } from '../server/src/mock.js';
 import type { ZoneContext } from './logistics.js';
 import { computePromise, operationsHours, parseDurationHours, type PromiseInput } from './promise.js';
 import type { Destination, Item } from './types.js';
@@ -95,6 +95,31 @@ describe('local delivery promise', () => {
     const o = run('SDD', [['PARKA_WINTER_KK_M', 1]], paris, { stock: null });
     expect(o.stock_unverified).toBe(true);
     expect(used(o)).toEqual(['r_stores_idf_sdd']);
+  });
+});
+
+describe('with carrier timetables', () => {
+  const FRIDAY_18H = 1795194000; // Friday 20 Nov 2026 18:00 Europe/Paris
+  const timetables = new Map(mockTimetables.map((t) => [t.id, t]));
+
+  it('uses the pickup cutoff, the transit days and the end of the delivery slot', () => {
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { from: FRIDAY_18H, timetables });
+    const monday16 = FRIDAY_18H + (2 * 24 + 22) * 3600;
+    expect(used(o)).toEqual(['r_wh_fr_colissimo']);
+    expect(o.eta_start).toBe(monday16 + 24 * 3600);
+    expect(o.eta_end).toBe(monday16 + 74 * 3600);
+    expect(o.cutoff).toBe(monday16 + 3600);
+    expect(o.analysis[0].timeline?.[0].pickup?.name).toContain('Colissimo');
+  });
+
+  it('ranks the fastest schema on the real date, not only the transit time', () => {
+    const o = run('SDD', [['SCARF_WOOL_RD', 1]], paris, { from: FRIDAY_18H, timetables });
+    // the store can be picked up on Friday evening by the courier (9h-20h every day)
+    expect(used(o)).toEqual(['r_stores_idf_sdd']);
+    // ready 19:00 (1h of operations), courier pickup 19:00, 1h-3h of transit:
+    // earliest 20:00 inside the Friday 10h-21h slot, latest 22:00 -> end of the Saturday slot (21:00)
+    expect(o.eta_start).toBe(FRIDAY_18H + 2 * 3600);
+    expect(o.eta_end).toBe(FRIDAY_18H + 27 * 3600);
   });
 });
 

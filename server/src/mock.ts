@@ -71,16 +71,48 @@ const r = (
 });
 
 export const mockRoutes: DeliveryRoute[] = [
-  r('r_wh_fr_colissimo', 'colissimo', 'home', 'z_wh_tls', 'z_fr', 24, 72, { metric_values: { cost_by_parcel: 6.5 } }),
+  r('r_wh_fr_colissimo', 'colissimo', 'home', 'z_wh_tls', 'z_fr', 24, 72, { pickup_timetable_id: 'tt_colissimo_pickup', delivery_timetable_id: 'tt_colissimo_delivery', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 6.5 } }),
   r('r_wh_eu_dhl', 'dhl', 'express', 'z_wh_tls', 'z_eu', 48, 96, { metric_values: { cost_by_parcel: 14 } }),
-  r('r_wh_hub_paris', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_paris', 12, 24, { metric_values: { cost_by_parcel: 1.2 } }),
-  r('r_hub_idf_sdd', 'stuart', 'same_day', 'z_hub_paris', 'z_idf', 2, 6, { metric_values: { cost_by_parcel: 9 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
-  r('r_wh_hub_mrs', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_mrs', 8, 16, { metric_values: { cost_by_parcel: 1 } }),
+  r('r_wh_hub_paris', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_paris', 12, 24, { pickup_timetable_id: 'tt_geodis_pickup', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 1.2 } }),
+  r('r_hub_idf_sdd', 'stuart', 'same_day', 'z_hub_paris', 'z_idf', 2, 6, { pickup_timetable_id: 'tt_stuart_pickup', delivery_timetable_id: 'tt_stuart_delivery', metric_values: { cost_by_parcel: 9 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
+  r('r_wh_hub_mrs', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_mrs', 8, 16, { pickup_timetable_id: 'tt_geodis_pickup', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 1 } }),
   r('r_hub_corse_ferry', 'corsica_ferries', 'fret', 'z_hub_mrs', 'z_corse', 24, 48, { metric_values: { cost_by_parcel: 7.5 } }),
-  r('r_wh_stores_shuttle', 'store_shuttle', 'navette', 'z_wh_tls', 'z_stores_fr', 24, 48, { metric_values: { cost_by_parcel: 0.8 } }),
-  r('r_stores_idf_sdd', 'stuart', 'same_day', 'z_stores_idf', 'z_idf', 1, 3, { metric_values: { cost_by_parcel: 8 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
-  r('r_stores_fr_colissimo', 'colissimo', 'home', 'z_stores_fr', 'z_fr', 24, 48, { metric_values: { cost_by_parcel: 6.9 } }),
+  r('r_wh_stores_shuttle', 'store_shuttle', 'navette', 'z_wh_tls', 'z_stores_fr', 24, 48, { pickup_timetable_id: 'tt_shuttle_pickup', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 0.8 } }),
+  r('r_stores_idf_sdd', 'stuart', 'same_day', 'z_stores_idf', 'z_idf', 1, 3, { pickup_timetable_id: 'tt_stuart_pickup', delivery_timetable_id: 'tt_stuart_delivery', metric_values: { cost_by_parcel: 8 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
+  r('r_stores_fr_colissimo', 'colissimo', 'home', 'z_stores_fr', 'z_fr', 24, 48, { pickup_timetable_id: 'tt_colissimo_pickup', delivery_timetable_id: 'tt_colissimo_delivery', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 6.9 } }),
   r('r_stores_stores', 'store_shuttle', 'interstore', 'z_stores_fr', 'z_stores_fr', 24, 48, { metric_values: { cost_by_parcel: 1.5 } }),
+];
+
+/* Carrier timetables (seconds from Monday 00:00, Europe/Paris) */
+const H = 3600;
+const D = 24 * H;
+const weekdays = (from: number, to: number, days = [0, 1, 2, 3, 4]) => days.map((d) => ({ start: d * D + from * H, end: d * D + to * H, options: { open: true } }));
+const tt = (id: string, name: string, type: string, timespans: { start: number; end: number; options: { open: boolean } }[]) => ({
+  id,
+  name,
+  type,
+  hours: { timezone: 'Europe/Paris', timespans },
+});
+export const mockTimetables = [
+  tt('tt_colissimo_pickup', 'Colissimo enlèvement 16h-17h', 'carrier_pickup_timetable', weekdays(16, 17)),
+  tt('tt_colissimo_delivery', 'Colissimo livraison lun-sam 8h-18h', 'carrier_delivery_timetable', weekdays(8, 18, [0, 1, 2, 3, 4, 5])),
+  tt('tt_trucks_weekdays', 'Camions lun-ven', 'carrier_transit_timetable', weekdays(0, 24)),
+  tt('tt_geodis_pickup', 'Geodis enlèvement 18h-19h', 'carrier_pickup_timetable', weekdays(18, 19)),
+  tt('tt_stuart_pickup', 'Stuart enlèvement 9h-20h', 'carrier_pickup_timetable', weekdays(9, 20, [0, 1, 2, 3, 4, 5, 6])),
+  tt('tt_stuart_delivery', 'Stuart créneaux 10h-21h', 'carrier_delivery_timetable', weekdays(10, 21, [0, 1, 2, 3, 4, 5, 6])),
+  tt('tt_shuttle_pickup', 'Navette enlèvement 7h-8h', 'carrier_pickup_timetable', weekdays(7, 8)),
+];
+export const mockScheduledEvents = [
+  {
+    id: 'ev_armistice',
+    name: 'Armistice (pas de livraison Colissimo)',
+    type: 'bank_holiday',
+    start: 1794956400, // 2026-11-11 00:00 Europe/Paris
+    end: 1795042800,
+    options: { open: false },
+    timetable_types: ['carrier_delivery_timetable'],
+    links: { carriers: ['colissimo'] },
+  },
 ];
 
 export const mockConfigs: DeliveryConfig[] = [
@@ -350,6 +382,12 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
         stocks: eps.flatMap((e) => items.filter((i) => (stock[e]?.[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: stock[e][i], type: 'on_hand' }))),
       };
     }
+    case '/timetables': {
+      const type = (body.filters as { type?: string } | undefined)?.type;
+      return { timetables: mockTimetables.filter((x) => !type || x.type === type) };
+    }
+    case '/scheduledevents':
+      return { scheduled_events: mockScheduledEvents };
     case '/sort_orders':
       return { sort_orders: mockSortOrders };
     case '/delivery_restrictions':

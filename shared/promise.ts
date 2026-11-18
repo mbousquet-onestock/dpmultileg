@@ -14,6 +14,7 @@
 import {
   buildSchemas,
   configsFor,
+  criterionKind,
   criterionValue,
   destinationInZone,
   isClickAndCollect,
@@ -26,6 +27,7 @@ import {
   type StockLine,
   type ZoneContext,
 } from './logistics.js';
+import { timeLegs, type LegTiming, type ScheduledEvent, type Timetable } from './timetables.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Destination, Item, LineItem, PromiseOption, PromiseRoute, SortOrder } from './types.js';
 
 export interface PromiseInput {
@@ -45,9 +47,12 @@ export interface PromiseInput {
   /** Stock lines; null when the stock could not be read (stock is then assumed available). */
   stock: StockLine[] | null;
   price?: number;
+  /** Carrier timetables (GET /timetables) by id, and scheduled events (GET /scheduledevents). */
+  timetables?: Map<string, Timetable>;
+  events?: ScheduledEvent[];
 }
 
-export type ExclusionKind = 'restriction' | 'constraint' | 'no_stock';
+export type ExclusionKind = 'restriction' | 'constraint' | 'no_stock' | 'timetable';
 
 export interface SchemaAnalysis {
   schema: LogisticSchema;
@@ -61,6 +66,10 @@ export interface SchemaAnalysis {
   exclusions: { kind: ExclusionKind; item_id?: string; text: string }[];
   eta_start: number;
   eta_end: number;
+  /** Latest time the parcel must be ready for the first carrier pickup (carrier cutoff), when known. */
+  cutoff?: number;
+  /** Leg by leg timing (max transit track) with the pickup and delivery slots used. */
+  timeline?: LegTiming[];
   cost?: number;
 }
 
@@ -205,16 +214,35 @@ function stockOf(stock: StockLine[], endpoint: string, item: string): number {
   return stock.filter((s) => s.endpoint_id === endpoint && s.item_id === item && AVAILABLE.has(s.type ?? '')).reduce((n, s) => n + s.quantity, 0);
 }
 
-/** Comparator implementing the priorities (estimated criteria values). */
+/** Value of a priority criterion for an analysed schema: real ETA (timetables) for time criteria, metrics otherwise. */
+export function analysisValue(a: SchemaAnalysis, field: string): number | undefined {
+  if (criterionKind(field) === 'time') return /start/i.test(field) ? a.eta_start : a.eta_end;
+  return criterionValue(a.schema, field);
+}
+
+/** First criterion of the priorities on which two analysed schemas differ. */
+export function decisiveBetween(order: SortOrder, selected: SchemaAnalysis, other: SchemaAnalysis) {
+  const criteria = order.sort_criterias ?? [];
+  for (let i = 0; i < criteria.length; i++) {
+    const { field, desc = false } = criteria[i];
+    const a = analysisValue(selected, field);
+    const b = analysisValue(other, field);
+    if (a === undefined || b === undefined || a === b) continue;
+    return { rank: i + 1, field, desc, chosen: a, other: b, chosenBetter: desc ? a > b : a < b };
+  }
+  return undefined;
+}
+
+/** Comparator implementing the priorities. */
 function byPriorities(order: SortOrder) {
-  return (a: LogisticSchema, b: LogisticSchema) => {
+  return (a: SchemaAnalysis, b: SchemaAnalysis) => {
     for (const c of order.sort_criterias ?? []) {
-      const va = criterionValue(a, c.field);
-      const vb = criterionValue(b, c.field);
+      const va = analysisValue(a, c.field);
+      const vb = analysisValue(b, c.field);
       if (va === undefined || vb === undefined || va === vb) continue;
       return c.desc ? vb - va : va - vb;
     }
-    return a.legs.length - b.legs.length;
+    return a.schema.legs.length - b.schema.legs.length;
   };
 }
 
@@ -265,7 +293,9 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   const opsHours = operationsHours(config);
 
   // 1-2. candidate schemas, sorted by priorities
-  const schemas = buildSchemas(config, destination, input.routes, ctx, { maxLegs: 3, limit: 50 }).sort(byPriorities(order));
+  const schemas = buildSchemas(config, destination, input.routes, ctx, { maxLegs: 3, limit: 50 });
+  const timing = { timetables: input.timetables ?? new Map<string, Timetable>(), events: input.events ?? [] };
+  const readyAt = from + Math.round(opsHours * 3600);
 
   // 3-4. exclusions and stock per schema
   const analysis: SchemaAnalysis[] = schemas.map((schema) => {
@@ -290,17 +320,26 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       if (!stockUnverified && !stockLines.find((s) => s.item_id === l.item_id)!.endpoints.length)
         exclusions.push({ kind: 'no_stock', item_id: l.item_id, text: '' });
     }
+    // 6. timing with the carrier timetables (pickup cutoff, transit days, delivery slots)
+    const routes = schema.legs.map((l) => l.route);
+    const fast = timeLegs(routes, readyAt, 'min', timing);
+    const slow = timeLegs(routes, readyAt, 'max', timing);
+    if (!fast || !slow)
+      for (const l of lines) exclusions.push({ kind: 'timetable', item_id: l.item_id, text: routes.map((r) => `${r.carrier.name} · ${r.carrier.option}`).join(' → ') });
+    const firstPickup = (fast ?? [])[0]?.pickup;
     return {
       schema,
       shipment: -1,
       shipments: [],
       stock: stockLines,
       exclusions,
-      eta_start: from + Math.round((opsHours + schema.minHours) * 3600),
-      eta_end: from + Math.round((opsHours + schema.maxHours) * 3600),
+      eta_start: fast ? fast[fast.length - 1].delivered : from + Math.round((opsHours + schema.minHours) * 3600),
+      eta_end: slow ? slow[slow.length - 1].delivered : from + Math.round((opsHours + schema.maxHours) * 3600),
+      cutoff: firstPickup ? firstPickup.end - Math.round(opsHours * 3600) : undefined,
+      timeline: slow,
       cost: schemaCost(schema),
     };
-  });
+  }).sort(byPriorities(order));
 
   const canServe = (a: SchemaAnalysis, item: string) => !a.exclusions.some((e) => e.item_id === item);
 
@@ -365,13 +404,10 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     s.a.shipments.push({ index: i, endpoint: s.endpoint, lines: s.lines });
   });
 
-  // 6. dates, cost and routes
-  const deliveryRoutes: PromiseRoute[] = shipments.flatMap((s) => {
-    let cumulMin = opsHours;
-    let cumulMax = opsHours;
-    return s.a.schema.legs.map((leg, idx) => {
-      cumulMin += leg.route.minimum_transit_hours ?? 0;
-      cumulMax += leg.route.maximum_transit_hours ?? leg.route.minimum_transit_hours ?? 0;
+  // 7. routes, dates, cost
+  const deliveryRoutes: PromiseRoute[] = shipments.flatMap((s) =>
+    s.a.schema.legs.map((leg, idx) => {
+      const tl = s.a.timeline?.[idx];
       return {
         id: leg.route.id,
         carrier: leg.route.carrier,
@@ -379,12 +415,13 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         destination_zone_id: leg.route.destination_zone_id,
         origin_endpoint_id: idx === 0 ? s.endpoint : undefined,
         items: s.lines.map((l) => ({ id: l.item_id, quantity: l.qty })),
-        eta_start: from + Math.round(cumulMin * 3600),
-        eta_end: from + Math.round(cumulMax * 3600),
+        eta_start: tl?.slot?.start ?? tl?.arrival,
+        eta_end: tl?.delivered,
         metric_values: leg.route.metric_values,
       };
-    });
-  });
+    }),
+  );
+  const cutoffs = shipments.map((s) => s.a.cutoff).filter((c): c is number => c !== undefined);
   const cost = shipments.reduce((sum, s) => sum + (s.a.cost ?? 0), 0);
   const carbon = shipments.reduce((sum, s) => sum + (criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
 
@@ -397,6 +434,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     status: excluded.length ? 'partial' : 'valid',
     eta_start: Math.max(...shipments.map((s) => s.a.eta_start)),
     eta_end: Math.max(...shipments.map((s) => s.a.eta_end)),
+    cutoff: cutoffs.length ? Math.min(...cutoffs) : undefined,
     cost: Math.round(cost * 100) / 100,
     carbon_footprint: carbon || undefined,
     shipment_number: shipments.length,

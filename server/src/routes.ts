@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { collectStockLines } from '../../shared/logistics.js';
+import type { ScheduledEvent, Timetable } from '../../shared/timetables.js';
 import { asList } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
@@ -201,9 +202,22 @@ export function apiRouter(): Router {
             return [] as T[];
           }
         });
-      const [sortOrders, restrictions] = await Promise.all([
+      const [sortOrders, restrictions, timetables, scheduledEvents] = await Promise.all([
         optional<SortOrder>('sort_orders', '/sort_orders', 'sort_orders'),
         optional<DeliveryRestriction>('delivery_restrictions', '/delivery_restrictions', 'delivery_restrictions'),
+        cached(t, 'timetables', () => fetchCarrierTimetables(t, routes, req.requestId)),
+        cached(t, 'scheduled_events', async () => {
+          try {
+            const now = Math.floor(Date.now() / 1000);
+            return asList<ScheduledEvent>(
+              await callOnestock(t, 'GET', '/scheduledevents', { filters: { from: now - 86400, to: now + 60 * 86400 } }),
+              'scheduled_events',
+            );
+          } catch (e) {
+            log('warn', 'optional_referential_unavailable', { request_id: req.requestId, path: '/scheduledevents', error: e instanceof Error ? e.message : String(e) });
+            return [] as ScheduledEvent[];
+          }
+        }),
       ]);
       res.json({
         delivery_configs: configs,
@@ -213,6 +227,8 @@ export function apiRouter(): Router {
         endpoints,
         sort_orders: sortOrders,
         delivery_restrictions: restrictions,
+        timetables,
+        scheduled_events: scheduledEvents,
       });
     }),
   );
@@ -411,6 +427,41 @@ export function apiRouter(): Router {
   });
 
   return r;
+}
+
+const CARRIER_TIMETABLE_TYPES = ['carrier_pickup_timetable', 'carrier_transit_timetable', 'carrier_delivery_timetable'];
+
+/**
+ * Carrier timetables with their weekly slots (hours.timespans). GET /timetables is called per type; timetables
+ * referenced by the routes but returned without hours are fetched one by one (GET /timetables/{id}).
+ */
+async function fetchCarrierTimetables(t: { site_id: string; environment: string; api_url: string }, routes: DeliveryRoute[], requestId?: string): Promise<Timetable[]> {
+  const byId = new Map<string, Timetable>();
+  for (const type of CARRIER_TIMETABLE_TYPES) {
+    try {
+      const res = await callOnestock(t, 'GET', '/timetables', { filters: { type, fields: ['id', 'name', 'type', 'hours'] } });
+      for (const tt of asList<Timetable>(res, 'timetables')) byId.set(tt.id, { ...tt, type: tt.type ?? type });
+    } catch (e) {
+      log('warn', 'optional_referential_unavailable', { request_id: requestId, path: `/timetables (${type})`, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  const referenced = new Set<string>();
+  for (const r of routes)
+    for (const [k, v] of Object.entries(r as unknown as Record<string, unknown>))
+      if (/timetable/i.test(k)) for (const id of Array.isArray(v) ? v : [v]) if (typeof id === 'string' && id) referenced.add(id);
+  const missing = [...referenced].filter((id) => !byId.get(id)?.hours?.timespans).slice(0, 80);
+  await Promise.all(
+    missing.map(async (id) => {
+      try {
+        const res = (await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, { fields: ['id', 'name', 'type', 'hours'] })) as Record<string, unknown>;
+        const tt = (res?.timetable ?? res) as Timetable;
+        if (tt && typeof tt === 'object') byId.set(id, { ...byId.get(id), ...tt, id });
+      } catch (e) {
+        log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: e instanceof Error ? e.message : String(e) });
+      }
+    }),
+  );
+  return [...byId.values()];
 }
 
 async function fetchEndpoints(t: { site_id: string; environment: string; api_url: string }, filter: Record<string, unknown>, start = 0): Promise<Endpoint[]> {

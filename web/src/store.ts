@@ -128,6 +128,8 @@ export async function runTest() {
       items: new Map(state.lines.map((l) => [l.item.id, l.item])),
       stock,
       price: state.price.enabled ? state.price.value : undefined,
+      timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
+      events: ref.scheduled_events ?? [],
     });
     state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
