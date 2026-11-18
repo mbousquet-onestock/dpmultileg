@@ -14,7 +14,15 @@ const total = ref(0);
 let timer: number | undefined;
 let seq = 0;
 
-const PAGE = 10;
+const PAGE = 5;
+/** Quantity to add for each item of the results (1 by default). */
+const qty = ref<Record<string, number>>({});
+const added = ref<string | null>(null);
+function add(item: Item) {
+  addLine(item, Math.max(1, qty.value[item.id] ?? 1));
+  added.value = item.id;
+  window.setTimeout(() => added.value === item.id && (added.value = null), 1500);
+}
 const loadingMore = ref(false);
 
 async function search() {
@@ -74,7 +82,7 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
       </button>
     </div>
 
-    <OsModal v-model:visible="open" :title="t('addItem')" size="l">
+    <OsModal v-model:visible="open" :title="t('addItem')" size="m">
       <div class="search">
         <OsInputSearch v-model="query" :placeholder="t('searchItems')" :pending="pending" />
         <div class="results">
@@ -89,7 +97,20 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
             :tertiary-text="price(item) || undefined"
           >
             <template #end>
-              <OsButton type="secondary" icon="add" :text="t('add')" @click="addLine(item)" />
+              <OsInputNumber
+                class="qty-input"
+                :model-value="qty[item.id] ?? 1"
+                :min="1"
+                :step="1"
+                :aria-label="t('quantity')"
+                @update:model-value="qty[item.id] = $event ?? 1"
+              />
+              <OsButton
+                type="secondary"
+                :icon="added === item.id ? 'check' : 'add'"
+                :text="added === item.id ? t('added') : t('add')"
+                @click="add(item)"
+              />
             </template>
           </OsEntity>
           <p v-if="!pending && !found.length" class="os-label-s os-text-secondary">{{ t('noItem') }}</p>
@@ -122,8 +143,9 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
 .item-card.add:hover { background: var(--os-surface-hover); }
 .plus { width: 80px; height: 80px; border-radius: 5px; background: var(--os-neutral-50); display: flex; align-items: center; justify-content: center; margin-bottom: 18px; color: var(--os-neutral-700); }
 .search { display: flex; flex-direction: column; gap: 12px; }
-.results { display: flex; flex-direction: column; gap: 4px; min-height: 200px; }
+.results { display: flex; flex-direction: column; gap: 4px; }
 .result { padding: 8px; border-radius: 5px; }
 .result:hover { background: var(--os-surface-hover); }
+.qty-input { width: 80px; }
 .more { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; }
 </style>

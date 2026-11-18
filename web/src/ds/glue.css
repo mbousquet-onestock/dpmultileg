@@ -17,3 +17,6 @@
 .os-alert { display: flex; }
 .ds-entity-image { display: block; }
 .os-button .hidden { visibility: hidden; }
+
+/* In the OneStock iframe the page is as tall as its content: open dialogs at the top instead of the middle. */
+.os-modal-overlay { align-items: flex-start; padding-top: 24px; }
