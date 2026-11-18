@@ -91,6 +91,21 @@ const rows = computed<Row[]>(() => {
         reasons.push({ ok: false, text: t('whyNoStock').replace('{item}', `${itemLabel(s.item_id)} × ${s.qty}`).replace('{zone}', zoneName(a.schema.originZoneId ?? '')) });
       }
     }
+    // Cost table row used for each leg
+    for (const c of a.costs ?? []) {
+      const leg = a.schema.legs.find((l) => l.route.id === c.route_id)?.route;
+      const carrier = leg ? `${leg.carrier.name} · ${leg.carrier.option}` : c.route_id;
+      if (c.conditions || c.cost !== undefined)
+        reasons.push({
+          ok: null,
+          text: t('whyCostRow')
+            .replace('{carrier}', carrier)
+            .replace('{conditions}', c.conditions ?? t('whyNoCondition'))
+            .replace('{cost}', c.cost !== undefined ? formatMoney(c.cost, currency.value) : '—')
+            .replace('{fees}', c.shipping_fees !== undefined ? ` · ${t('whyFees')} ${formatMoney(c.shipping_fees, currency.value)}` : ''),
+        });
+      if (c.unknown.length) reasons.push({ ok: null, text: t('whyUnknownConstraints').replace('{list}', c.unknown.join(', ')) });
+    }
     if (!selected && selectedRef && !a.exclusions.length) {
       const d = decisiveBetween(sortOrder.value, selectedRef, a);
       if (d?.chosenBetter)

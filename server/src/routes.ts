@@ -2,7 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import { timingSafeEqual } from 'node:crypto';
 import { collectStockLines } from '../../shared/logistics.js';
 import { normalizeTimetable, type ExecutionTime, type ScheduledEvent, type Timetable } from '../../shared/timetables.js';
-import { asList } from '../../shared/normalize.js';
+import { asList, normalizeRoutes } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
 import { getStore } from './db.js';
@@ -168,7 +168,7 @@ export function apiRouter(): Router {
       const t = target(req.session!);
       const [configs, routes, zones, salesChannels] = await Promise.all([
         cached(t, 'delivery_configs', async () => asList<DeliveryConfig>(await callOnestock(t, 'GET', '/delivery_configs'), 'delivery_configs')),
-        cached(t, 'delivery_routes', async () => asList<DeliveryRoute>(await callOnestock(t, 'GET', '/delivery_routes'), 'delivery_routes')),
+        cached(t, 'delivery_routes', async () => normalizeRoutes(await callOnestock(t, 'GET', '/delivery_routes'))),
         cached(t, 'zones', async () => asList<Zone>(await callOnestock(t, 'GET', '/zones'), 'zones')),
         cached(t, 'sales_channels', async () => {
           try {

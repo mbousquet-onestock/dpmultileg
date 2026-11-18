@@ -35,6 +35,24 @@ export interface DeliveryRoute {
   information?: Record<string, unknown>;
   carrier_information?: Record<string, unknown>;
   constraints?: unknown;
+  /** Cost table rows of the route (GET /delivery_routes groups): constraints + metrics of each row. */
+  variants?: RouteVariant[];
+}
+
+export interface Constraint {
+  formula?: string;
+  name?: string;
+  op?: string;
+  value?: number;
+}
+
+/** A row of the cost table of a delivery route. */
+export interface RouteVariant {
+  id: string;
+  metric_values?: Record<string, number>;
+  parcel_constraints: Constraint[];
+  order_constraints: Constraint[];
+  information?: Record<string, unknown>;
 }
 
 export interface DeliveryConfig {

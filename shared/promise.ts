@@ -39,7 +39,7 @@ import {
   type ScheduledEvent,
   type Timetable,
 } from './timetables.js';
-import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Destination, Item, LineItem, PromiseOption, PromiseRoute, SortOrder } from './types.js';
+import type { Constraint, DeliveryConfig, DeliveryRestriction, DeliveryRoute, Destination, Item, LineItem, PromiseOption, PromiseRoute, RouteVariant, SortOrder } from './types.js';
 
 export interface PromiseInput {
   salesChannel: string;
@@ -87,6 +87,9 @@ export interface SchemaAnalysis {
   operations?: OperationTiming[];
   /** Stock location used to time the preparation. */
   timing_endpoint?: string;
+  /** Cost table row used for each leg. */
+  costs?: { route_id: string; variant_id?: string; conditions?: string; cost?: number; carbon?: number; shipping_fees?: number; unknown: string[] }[];
+  carbon?: number;
   cost?: number;
 }
 
@@ -180,25 +183,94 @@ export function restrictionMatchesItem(r: DeliveryRestriction, item: Item | unde
   return false;
 }
 
-/** Evaluate route parcel constraints ("sumW <= 30") for the lines of a shipment. Undefined when not evaluable. */
-export function constraintFailure(route: DeliveryRoute, lines: LineItem[], items: Map<string, Item>): string | undefined {
-  const c = (route.constraints ?? {}) as { parcel_constraints?: { formula?: string; op?: string; value?: number }[] };
-  for (const p of c.parcel_constraints ?? []) {
-    if (!p.formula || p.value === undefined || !p.op) continue;
-    const m = p.formula.match(/^(sum|max|min)(W|d1|d2|d3|V)$/i);
-    if (!m) continue;
-    const key = m[2].toLowerCase();
-    const names = key === 'w' ? ['weight', 'W', 'poids'] : key === 'v' ? ['volume', 'V'] : key === 'd1' ? ['d1', 'length', 'longueur'] : key === 'd2' ? ['d2', 'width', 'largeur'] : ['d3', 'height', 'hauteur'];
-    const values = lines.map((l) => {
-      const v = Number(attr(items.get(l.item_id), ...names)?.[0]);
-      return Number.isFinite(v) ? { v, qty: l.qty } : undefined;
-    });
-    if (values.some((v) => v === undefined)) continue;
-    const list = values as { v: number; qty: number }[];
-    const agg = m[1].toLowerCase() === 'sum' ? list.reduce((s, x) => s + x.v * x.qty, 0) : m[1].toLowerCase() === 'max' ? Math.max(...list.map((x) => x.v)) : Math.min(...list.map((x) => x.v));
-    if (!compare(p.op, agg, p.value)) return `${p.formula} = ${Math.round(agg * 100) / 100} (${p.op} ${p.value})`;
-  }
+/* ------------------------------------------------------------------------------------------------
+ * Cost tables (route variants) and constraints
+ * ---------------------------------------------------------------------------------------------- */
+
+const WEIGHT = ['weight', 'W', 'poids'];
+const DIMS: Record<string, string[]> = { d1: ['d1', 'length', 'longueur'], d2: ['d2', 'width', 'largeur'], d3: ['d3', 'height', 'hauteur'], v: ['volume', 'V'] };
+
+function itemNumber(item: Item | undefined, names: string[]): number | undefined {
+  const v = Number(attr(item, ...names)?.[0]);
+  return Number.isFinite(v) ? v : undefined;
+}
+
+/** Value of a parcel formula for the lines of a shipment: W / sumW (weight), qty, V, d1-d3, with sum/max/min. */
+export function parcelValue(formula: string, lines: LineItem[], items: Map<string, Item>): number | undefined {
+  const f = formula.trim().toLowerCase();
+  if (f === 'qty' || f === 'sumqty' || f === 'quantity') return lines.reduce((n, l) => n + l.qty, 0);
+  const m = f.match(/^(sum|max|min)?(w|v|d1|d2|d3)$/);
+  if (!m) return undefined;
+  const names = m[2] === 'w' ? WEIGHT : DIMS[m[2]];
+  const values = lines.map((l) => ({ v: itemNumber(items.get(l.item_id), names), qty: l.qty }));
+  if (values.some((x) => x.v === undefined)) return undefined;
+  const agg = m[1] ?? (m[2] === 'w' || m[2] === 'v' ? 'sum' : 'max');
+  const list = values as { v: number; qty: number }[];
+  if (agg === 'sum') return list.reduce((s, x) => s + x.v * x.qty, 0);
+  return agg === 'max' ? Math.max(...list.map((x) => x.v)) : Math.min(...list.map((x) => x.v));
+}
+
+/** Value of an order constraint: price (order price), qty, weight. */
+export function orderValue(name: string, lines: LineItem[], items: Map<string, Item>, orderPrice?: number): number | undefined {
+  const n = name.trim().toLowerCase();
+  if (n === 'price' || n === 'amount' || n === 'total') return orderPrice;
+  if (n === 'qty' || n === 'quantity') return lines.reduce((s, l) => s + l.qty, 0);
+  if (n === 'weight' || n === 'w') return parcelValue('W', lines, items);
   return undefined;
+}
+
+/** Order price: the price option of the test, else the sum of the item prices. */
+export function orderPriceOf(lines: LineItem[], items: Map<string, Item>, price?: number): number | undefined {
+  if (price !== undefined) return price;
+  const prices = lines.map((l) => Number(items.get(l.item_id)?.price) * l.qty);
+  return prices.every((p) => Number.isFinite(p)) ? prices.reduce((a, b) => a + b, 0) : undefined;
+}
+
+const OPS: Record<string, string> = { lt: '<', lte: '≤', gt: '>', gte: '≥', eq: '=', ne: '≠' };
+export const describeConstraint = (c: Constraint) => `${c.formula ?? c.name} ${OPS[String(c.op).toLowerCase()] ?? c.op} ${c.value}`;
+
+export interface VariantChoice {
+  variant?: RouteVariant;
+  /** Conditions of the row used ("W < 10, price < 100"). */
+  conditions?: string;
+  /** Constraints that could not be evaluated (missing item data). */
+  unknown: string[];
+  /** No row matches: values of the shipment. */
+  failure?: string;
+}
+
+/**
+ * Row of the cost table of a route matching a shipment (parcel constraints on its lines, order constraints on the
+ * order). Constraints that can not be evaluated (missing weight...) are ignored and reported.
+ */
+export function selectVariant(route: DeliveryRoute, lines: LineItem[], items: Map<string, Item>, orderPrice?: number): VariantChoice {
+  const legacy = (route.constraints ?? {}) as { parcel_constraints?: Constraint[]; order_constraints?: Constraint[] };
+  const rows: RouteVariant[] = route.variants?.length
+    ? route.variants
+    : [{ id: route.id, metric_values: route.metric_values, parcel_constraints: legacy.parcel_constraints ?? [], order_constraints: legacy.order_constraints ?? [] }];
+  let best: { row: RouteVariant; unknown: string[] } | undefined;
+  const observed = new Map<string, string>();
+  for (const row of rows) {
+    const unknown: string[] = [];
+    let ok = true;
+    const check = (c: Constraint, value: number | undefined, label: string) => {
+      if (c.value === undefined || !c.op) return;
+      if (value === undefined) return unknown.push(describeConstraint(c));
+      observed.set(label, `${label} = ${Math.round(value * 100) / 100}`);
+      if (!compare(c.op, value, c.value)) ok = false;
+    };
+    for (const c of row.parcel_constraints) if (c.formula) check(c, parcelValue(c.formula, lines, items), c.formula);
+    for (const c of row.order_constraints) if (c.name) check(c, orderValue(c.name, lines, items, orderPrice), c.name);
+    if (ok && (!best || unknown.length < best.unknown.length)) best = { row, unknown };
+  }
+  if (!best) return { unknown: [], failure: [...observed.values()].join(', ') || '—' };
+  const conds = [...best.row.parcel_constraints, ...best.row.order_constraints].map(describeConstraint);
+  return { variant: best.row, conditions: conds.join(', ') || undefined, unknown: best.unknown };
+}
+
+/** Kept for compatibility: description of the failure when no cost table row matches. */
+export function constraintFailure(route: DeliveryRoute, lines: LineItem[], items: Map<string, Item>, orderPrice?: number): string | undefined {
+  return selectVariant(route, lines, items, orderPrice).failure;
 }
 
 const AVAILABLE = new Set(['on_hand', 'available', 'physical', 'stock', '']);
@@ -210,6 +282,8 @@ function stockOf(stock: StockLine[], endpoint: string, item: string): number {
 /** Value of a priority criterion for an analysed schema: real ETA (timetables) for time criteria, metrics otherwise. */
 export function analysisValue(a: SchemaAnalysis, field: string): number | undefined {
   if (criterionKind(field) === 'time') return /start/i.test(field) ? a.eta_start : a.eta_end;
+  if (/carbon|co2|footprint/i.test(field)) return a.carbon ?? criterionValue(a.schema, field);
+  if (/cost|price|fee/i.test(field)) return a.cost ?? criterionValue(a.schema, field);
   return criterionValue(a.schema, field);
 }
 
@@ -279,6 +353,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   if (lines.some((l) => !items.has(l.item_id))) return { ...base, config, status: 'none', reason: 'invalid_item' };
 
   const stockUnverified = input.stock === null;
+  const orderPrice = orderPriceOf(lines, items, input.price);
   const stock = input.stock ?? [];
   const order = prioritiesFor(config, input.sortOrders, input.salesChannel).order;
   const applied = config.applied_restrictions?.length ? input.restrictions.filter((r) => config.applied_restrictions!.includes(r.id)) : input.restrictions;
@@ -310,12 +385,28 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
           if (restrictionMatchesItem(r, items.get(l.item_id)) === true)
             exclusions.push({ kind: 'restriction', item_id: l.item_id, text: `${leg.route.carrier.name} · ${leg.route.carrier.option} : ${r.description ?? r.id}` });
         }
-        const failure = constraintFailure(leg.route, [l], items);
+        const failure = constraintFailure(leg.route, [l], items, orderPrice);
         if (failure) exclusions.push({ kind: 'constraint', item_id: l.item_id, text: `${leg.route.carrier.name} · ${leg.route.carrier.option} : ${failure}` });
       }
       if (!stockUnverified && !stockLines.find((s) => s.item_id === l.item_id)!.endpoints.length)
         exclusions.push({ kind: 'no_stock', item_id: l.item_id, text: '' });
     }
+    // Cost table row of each leg for the whole order (single shipment assumption), else for each line alone.
+    const costs = schema.legs.map((leg) => {
+      let choice = selectVariant(leg.route, lines, items, orderPrice);
+      if (!choice.variant) choice = selectVariant(leg.route, [lines[0]], items, orderPrice);
+      const mv = choice.variant?.metric_values ?? leg.route.metric_values ?? {};
+      return {
+        route_id: leg.route.id,
+        variant_id: choice.variant?.id,
+        conditions: choice.conditions,
+        cost: mv.cost_by_parcel ?? mv.cost,
+        carbon: mv.carbon_footprint,
+        shipping_fees: mv.shipping_fees,
+        unknown: choice.unknown,
+      };
+    });
+
     // 6. timing: preparation at the origin (before_shipping), carrier timetables (pickup cutoff, transit days,
     //    delivery slots), receiving in the collection store (after_shipping).
     const routes = schema.legs.map((l) => l.route);
@@ -353,7 +444,9 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       timeline: best?.slow,
       operations: best ? [...(atStart?.steps ?? []), ...best.prep, ...best.after] : atStart?.steps,
       timing_endpoint: best?.endpoint,
-      cost: schemaCost(schema),
+      costs,
+      cost: costs.some((c) => c.cost !== undefined) ? costs.reduce((sum, c) => sum + (c.cost ?? 0), 0) : schemaCost(schema),
+      carbon: costs.some((c) => c.carbon !== undefined) ? costs.reduce((sum, c) => sum + (c.carbon ?? 0), 0) : undefined,
     };
   }).sort(byPriorities(order));
 
@@ -445,7 +538,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   );
   const cutoffs = shipments.map((s) => s.a.cutoff).filter((c): c is number => c !== undefined);
   const cost = shipments.reduce((sum, s) => sum + (s.a.cost ?? 0), 0);
-  const carbon = shipments.reduce((sum, s) => sum + (criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
+  const carbon = shipments.reduce((sum, s) => sum + (s.a.carbon ?? criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
 
   return {
     ...base,
