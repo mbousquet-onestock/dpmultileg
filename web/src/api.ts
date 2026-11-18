@@ -132,7 +132,9 @@ export const api = {
   environments: (siteId: string) =>
     request<{ environments: { site_id: string; environment: string; label: string | null }[] }>('GET', `/standalone/environments?site_id=${encodeURIComponent(siteId)}`),
   referential: (refresh = false) => request<Referential>('GET', `/referential${refresh ? '?refresh=1' : ''}`),
-  searchItems: (pattern: string, lang: string, start = 0) => request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit: 20 }),
+  /** Items are fetched 10 by 10 ("Show more" loads the next page). */
+  searchItems: (pattern: string, lang: string, start = 0, limit = 10) =>
+    request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit }),
   stocks: (itemIds: string[], endpointIds: string[]) =>
     request<{ stocks: { endpoint_id: string; item_id: string; quantity: number; type?: string }[] }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),
   searchEndpoints: (query: string) => request<{ endpoints: Endpoint[] }>('POST', '/endpoints/search', { query }),

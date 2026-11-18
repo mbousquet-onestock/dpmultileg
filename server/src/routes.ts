@@ -204,7 +204,7 @@ export function apiRouter(): Router {
         features: ['name', 'image', 'image_url', 'price', 'color', 'size', 'weight', 'W', 'length', 'width', 'height', 'd1', 'd2', 'd3', 'volume', 'bulky', 'hazardous', 'category'],
         lang,
         get_total: true,
-        pagination: { start: Number(req.body?.start ?? 0), limit: Math.min(Number(req.body?.limit ?? 20), 50) },
+        pagination: { start: Number(req.body?.start ?? 0), limit: Math.min(Number(req.body?.limit ?? 10), 50) },
       };
       if (ids?.length) payload.item_ids = ids;
       if (pattern) {

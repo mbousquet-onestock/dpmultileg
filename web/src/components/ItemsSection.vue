@@ -14,11 +14,14 @@ const total = ref(0);
 let timer: number | undefined;
 let seq = 0;
 
+const PAGE = 10;
+const loadingMore = ref(false);
+
 async function search() {
   const id = ++seq;
   pending.value = true;
   try {
-    const res = await api.searchItems(query.value.trim(), lang.value);
+    const res = await api.searchItems(query.value.trim(), lang.value, 0, PAGE);
     if (id !== seq) return;
     found.value = res.items;
     total.value = res.total;
@@ -26,6 +29,20 @@ async function search() {
     if (id === seq) found.value = [];
   } finally {
     if (id === seq) pending.value = false;
+  }
+}
+
+/** Next 10 items of the same search. */
+async function more() {
+  const id = seq;
+  loadingMore.value = true;
+  try {
+    const res = await api.searchItems(query.value.trim(), lang.value, found.value.length, PAGE);
+    if (id !== seq) return;
+    found.value = [...found.value, ...res.items.filter((i) => !found.value.some((f) => f.id === i.id))];
+    total.value = res.total;
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -76,6 +93,10 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
             </template>
           </OsEntity>
           <p v-if="!pending && !found.length" class="os-label-s os-text-secondary">{{ t('noItem') }}</p>
+          <div v-if="found.length && found.length < total" class="more">
+            <span class="os-body-s os-text-secondary">{{ t('itemsShown').replace('{n}', String(found.length)).replace('{total}', String(total)) }}</span>
+            <OsButton type="secondary" :text="t('showMore')" :pending="loadingMore" @click="more" />
+          </div>
         </div>
       </div>
       <template #primaryActions>
@@ -104,4 +125,5 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
 .results { display: flex; flex-direction: column; gap: 4px; min-height: 200px; }
 .result { padding: 8px; border-radius: 5px; }
 .result:hover { background: var(--os-surface-hover); }
+.more { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 8px; }
 </style>
