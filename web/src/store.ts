@@ -126,6 +126,20 @@ export async function runTest() {
       restrictions: ref.delivery_restrictions ?? [],
     };
 
+    // Items added before their physical data were loaded: reload them (weight / dimensions for the constraints).
+    const missing = state.lines.filter((l) => l.item.weight === undefined).map((l) => l.item.id);
+    if (missing.length) {
+      try {
+        const { items: fresh } = await api.itemsByIds(missing, lang.value);
+        for (const f of fresh) {
+          const line = state.lines.find((l) => l.item.id === f.id);
+          if (line) line.item = { ...line.item, ...f, image: line.item.image ?? f.image };
+        }
+      } catch (e) {
+        console.warn('[dpmultileg] items reload failed', e);
+      }
+    }
+
     // Stock of every stock location that may serve the order (GET /stocks, by chunks).
     const eps = candidateEndpoints(common);
     let stock: StockLine[] | null = [];

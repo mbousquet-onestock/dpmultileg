@@ -16,6 +16,7 @@ const { createApp } = await import('./app.js');
 const { decrypt, encrypt } = await import('./crypto.js');
 const { verifyExtensionSignature } = await import('./signature.js');
 const { environmentFromApiUrl, getCredential, resolveApiUrl } = await import('./credentials.js');
+const { simplifyItem } = await import('./routes.js');
 
 const app = createApp();
 const SECRET = 'ext-secret';
@@ -138,5 +139,27 @@ describe('API', () => {
       .expect(200);
     const other = await request(app).put('/api/admin/credentials/c42/qualif').set('Authorization', `Bearer ${token}`).send({ user_id: 'x', password: 'y' });
     expect(other.status).toBe(403);
+  });
+});
+
+describe('GET /v3/items response', () => {
+  // Real response: weight is an item field (55); a stray "weight" feature (0.001) exists in "en"; the name is in "fr" only
+  const raw = {
+    id: '00003',
+    category_ids: ['Gros Electroménager'],
+    is_default: true,
+    product_id: '618065',
+    features: {
+      en: { weight: [0.001] },
+      fr: { color: ['Noir'], image: ['https://example.com/G_618065_C.webp'], name: ['CANDY Réfri-congélateur combiné'] },
+    },
+    weight: 55,
+  };
+  it('keeps the weight field, the name of any language and the image', () => {
+    for (const lang of ['en', 'fr']) {
+      const item = simplifyItem(raw as never, lang);
+      expect(item).toMatchObject({ id: '00003', name: 'CANDY Réfri-congélateur combiné', weight: 55, image: 'https://example.com/G_618065_C.webp' });
+      expect(item.attributes?.weight).toEqual([55]);
+    }
   });
 });

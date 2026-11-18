@@ -210,7 +210,7 @@ export function apiRouter(): Router {
         get_total: true,
         pagination: { start: Number(req.body?.start ?? 0), limit: Math.min(Number(req.body?.limit ?? 10), 50) },
       };
-      if (ids?.length) payload.item_ids = ids;
+      if (ids?.length) payload.filters = { ids };
       if (pattern) {
         payload.pattern = pattern;
         payload.searchable_fields = [
@@ -218,9 +218,10 @@ export function apiRouter(): Router {
           { name: 'name', priority: 2 },
         ];
       }
-      const result = (await callOnestock<{ items?: unknown; total?: number }>(t, 'GET', '/items', payload)) ?? {};
+      // GET /v3/items: returns the item fields (weight, dimensions) requested in `fields`.
+      const result = (await callOnestock<{ items?: unknown; total?: number; pagination?: { total?: number } }>(t, 'GET', '/v3/items', payload)) ?? {};
       const items = asList<Item>(result, 'items').map((i) => simplifyItem(i, lang));
-      res.json({ items, total: result.total ?? items.length });
+      res.json({ items, total: result.total ?? result.pagination?.total ?? items.length });
     }),
   );
 
@@ -631,8 +632,11 @@ async function fetchEndpoints(t: { site_id: string; environment: string; api_url
   return asList<Endpoint>(res, 'endpoints');
 }
 
-function simplifyItem(i: Item, lang: string): Item {
-  const f = i.features?.[lang] ?? i.features?.en ?? Object.values(i.features ?? {})[0] ?? {};
+export function simplifyItem(i: Item, lang: string): Item {
+  // Features of the requested language, completed by the other languages (a feature may exist in one language only).
+  const byLang = i.features ?? {};
+  const f: Record<string, unknown[]> = {};
+  for (const l of [...Object.keys(byLang).filter((x) => x !== lang && x !== 'en'), 'en', lang]) Object.assign(f, byLang[l] ?? {});
   const first = (k: string) => (Array.isArray(f[k]) ? f[k][0] : f[k]) as string | undefined;
   return {
     id: i.id,

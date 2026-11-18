@@ -124,7 +124,9 @@ export async function callOnestock<T = unknown>(
   for (let attempt = 0; attempt < 2; attempt++) {
     const token = await getToken(t, attempt > 0);
     try {
-      return (await rawCall(t.api_url, method, path, { ...body, site_id: t.site_id, token })) as T;
+      // A versioned path (/v3/items) replaces the version possibly present at the end of the API URL.
+      const base = /^\/v\d+\//.test(path) ? t.api_url.replace(/\/v\d+\/?$/, '') : t.api_url;
+      return (await rawCall(base, method, path, { ...body, site_id: t.site_id, token })) as T;
     } catch (e) {
       // Token expired / revoked: login again once.
       if (e instanceof OnestockError && e.status === 401 && attempt === 0) continue;

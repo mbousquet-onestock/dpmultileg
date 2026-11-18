@@ -142,6 +142,8 @@ export const api = {
     request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit }),
   stocks: (itemIds: string[], endpointIds: string[]) =>
     request<{ stocks: { endpoint_id: string; item_id: string; quantity: number; type?: string }[] }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),
+  /** Items by id (GET /v3/items filters.ids), with their weight and dimensions. */
+  itemsByIds: (ids: string[], lang: string) => request<{ items: Item[]; total: number }>('POST', '/items/search', { ids, lang, limit: Math.min(ids.length, 50) }),
   searchEndpoints: (query: string) => request<{ endpoints: Endpoint[] }>('POST', '/endpoints/search', { query }),
   deliveryPromises: (body: Record<string, unknown>) =>
     request<{ request: Record<string, unknown>; response: { delivery_options?: PromiseOption[] } }>('POST', '/delivery_promises', body),

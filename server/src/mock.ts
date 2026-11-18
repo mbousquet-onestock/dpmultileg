@@ -247,7 +247,7 @@ function pick<T extends { id: string }>(list: T[], body: Record<string, unknown>
 
 function searchItems(body: Record<string, unknown>) {
   const pattern = String(body.pattern ?? '').toLowerCase();
-  const itemIds = body.item_ids as string[] | undefined;
+  const itemIds = (body.item_ids ?? (body.filters as { ids?: string[] } | undefined)?.ids) as string[] | undefined;
   const pagination = (body.pagination ?? {}) as { limit?: number; start?: number };
   let list = mockItems;
   if (itemIds?.length) list = list.filter((i) => itemIds.includes(i.id));
@@ -420,6 +420,7 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
     case '/sales_channels':
       return { sales_channels: mockSalesChannels };
     case '/items':
+    case '/v3/items':
       return searchItems(body);
     case '/delivery_promises':
       return deliveryPromises(body);
