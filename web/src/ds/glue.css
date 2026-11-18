@@ -1,0 +1,19 @@
+/*
+ * Glue for the local fallback of the design system: positioning of the floating elements (menus, tooltips),
+ * done by floating-ui in the official package. Visual styles come from official.css.
+ */
+.ds-anchor { position: relative; }
+.ds-anchor .os-input-group { position: relative; }
+.ds-floating { position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; right: 0; min-width: 200px; }
+.ds-floating .os-menu .os-input-group { margin-bottom: 4px; }
+.ds-tooltip-anchor { position: relative; }
+.ds-tooltip { position: absolute; z-index: 70; display: none; white-space: nowrap; max-width: 320px; pointer-events: none; }
+.ds-tooltip-anchor:hover .ds-tooltip { display: block; }
+.ds-tooltip-bottom .ds-tooltip { top: calc(100% + 6px); left: 50%; transform: translateX(-50%); }
+.ds-tooltip-top .ds-tooltip { bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); }
+.ds-tooltip-left .ds-tooltip { right: calc(100% + 6px); top: 50%; transform: translateY(-50%); }
+.ds-tooltip-right .ds-tooltip { left: calc(100% + 6px); top: 50%; transform: translateY(-50%); }
+.ds-alert-actions { display: flex; gap: 4px; align-items: flex-start; }
+.os-alert { display: flex; }
+.ds-entity-image { display: block; }
+.os-button .hidden { visibility: hidden; }

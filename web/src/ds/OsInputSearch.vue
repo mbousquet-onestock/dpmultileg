@@ -6,23 +6,32 @@ const emit = defineEmits<{ 'update:modelValue': [string]; blur: []; focus: [] }>
 </script>
 <template>
   <OsField :label="label">
-    <input
-      class="os-input-search-field"
-      type="search"
-      :value="modelValue ?? ''"
-      :placeholder="placeholder"
-      @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-      @blur="emit('blur')"
-      @focus="emit('focus')"
-    />
-    <button v-if="modelValue && !pending" type="button" class="os-input-search-btn" aria-label="clear" @click="emit('update:modelValue', '')">
-      <OsIcon icon="close" size="s" color="secondary" />
-    </button>
-    <span v-else class="os-input-search-btn"><OsIcon :icon="pending ? 'loader' : 'search'" size="s" color="secondary" :rotation="pending" /></span>
+    <div class="os-input-text" data-testid="os-input-text">
+      <input
+        class="os-input-text-field placeholder-ellipsis"
+        data-testid="os-input-text-field"
+        type="text"
+        :value="modelValue ?? ''"
+        :placeholder="placeholder"
+        @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+        @blur="emit('blur')"
+        @focus="emit('focus')"
+      />
+    </div>
+    <template #end>
+      <div
+        v-if="modelValue && !pending"
+        role="button"
+        tabindex="0"
+        aria-label="clear"
+        class="os-input-group-child os-input-group-child-action os-input-group-end border-end"
+        @click.prevent="emit('update:modelValue', '')"
+      >
+        <div class="content"><OsIcon icon="close" size="s" /></div>
+      </div>
+      <div v-else class="os-input-group-child os-input-group-child-info os-input-group-end border-end">
+        <div class="content"><OsIcon :icon="pending ? 'loader' : 'search'" size="s" :rotation="pending" class="icon" /></div>
+      </div>
+    </template>
   </OsField>
 </template>
-<style scoped>
-.os-input-search-field { flex: 1; min-width: 0; height: 34px; padding: 8px 8px 8px 12px; border: 0; font: 400 14px Roboto, sans-serif; color: var(--os-text-primary); background: transparent; outline: none; }
-.os-input-search-field::-webkit-search-cancel-button { display: none; }
-.os-input-search-btn { display: inline-flex; align-items: center; border: 0; background: none; padding: 0 10px; cursor: pointer; }
-</style>

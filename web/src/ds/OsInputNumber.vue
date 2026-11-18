@@ -2,7 +2,7 @@
 import OsField from './OsField.vue';
 const props = defineProps<{ modelValue?: number; label?: string | { value: string }; placeholder?: string; min?: number; max?: number; step?: number; error?: string | boolean; supportingText?: string; disabled?: boolean; readonly?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [number | undefined] }>();
-function onInput(e: Event) {
+function onChange(e: Event) {
   const raw = (e.target as HTMLInputElement).value;
   if (raw === '') return emit('update:modelValue', undefined);
   let n = Number(raw);
@@ -13,21 +13,21 @@ function onInput(e: Event) {
 }
 </script>
 <template>
-  <OsField :label="label" :error="error" :supporting-text="supportingText" :disabled="disabled">
-    <input
-      class="os-input-number-field"
-      type="number"
-      :value="modelValue ?? ''"
-      :placeholder="placeholder"
-      :min="min"
-      :max="max"
-      :step="step"
-      :readonly="readonly"
-      @change="onInput"
-    />
+  <OsField :label="label" :error="error" :supporting-text="supportingText" :disabled="disabled" :readonly="readonly">
+    <div class="os-input-number" data-testid="os-input-number">
+      <input
+        class="os-input-number-field"
+        data-testid="os-input-number-field"
+        type="number"
+        :value="modelValue ?? ''"
+        :placeholder="placeholder"
+        :min="min"
+        :max="max"
+        :step="step"
+        :readonly="readonly"
+        :disabled="disabled"
+        @change="onChange"
+      />
+    </div>
   </OsField>
 </template>
-<style scoped>
-.os-input-number-field { width: 100%; height: 34px; padding: 8px 8px 8px 12px; border: 0; border-radius: 5px; font: 400 14px Roboto, sans-serif; color: var(--os-text-primary); background: transparent; outline: none; }
-.os-input-number-field::placeholder { color: var(--os-text-placeholder); }
-</style>

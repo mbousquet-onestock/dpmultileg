@@ -118,7 +118,16 @@ npx google-artifactregistry-auth --registry https://europe-west4-npm.pkg.dev/os-
 npm install @onestock-public/design-system
 ```
 
-Une fois le paquet installé, Vite l'utilise automatiquement. Sinon, il bascule sur `web/src/ds/`, un repli local qui reproduit la même API (props, événements, slots) d'après la [documentation du design system](https://design-system.onestock-retail.com), avec les vraies couleurs, la typographie Roboto et les icônes OneStock. Le dépôt compile et se déploie donc sans accès au registre. Pour utiliser le paquet officiel sur Vercel, il faut fournir un `.npmrc` authentifié au build.
+Une fois le paquet installé, Vite l'utilise automatiquement. Sinon, il bascule sur `web/src/ds/`, un repli local qui applique **les styles officiels** du design system : `web/src/ds/official.css` est généré à partir des feuilles de style publiées sur https://design-system.onestock-retail.com (scoping Vue retiré, puis réappliqué par composant). Les composants du repli produisent le même balisage et les mêmes classes que les composants officiels (`os-button`, `os-input-group`, `os-select`, `os-menu`, `os-modal`…) et exposent la même API (props, événements, slots). Le dépôt compile et se déploie donc sans accès au registre. `glue.css` ne gère que le positionnement des éléments flottants (menus, infobulles). Pour mettre à jour après une nouvelle version du design system :
+
+```bash
+node scripts/design-system/fetch_css.cjs /tmp/dscss
+```
+
+```bash
+python3 scripts/design-system/build_official_css.py /tmp/dscss web/src/ds/official.css
+```
+
 
 ## Développement
 

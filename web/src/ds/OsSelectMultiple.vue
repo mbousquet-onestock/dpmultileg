@@ -20,27 +20,31 @@ function pick(id: string) {
 }
 </script>
 <template>
-  <div ref="root" class="os-select-multiple">
-    <OsField :label="label" :error="error" :supporting-text="supportingText" :disabled="disabled" :focused="open">
-      <div class="os-select-input" tabindex="0" role="combobox" :aria-expanded="open" @click.prevent="!disabled && !readonly && (open = !open)" @keydown.esc="open = false">
-        <div class="chips">
-          <span v-if="!chips.length" class="placeholder">{{ placeholder }}</span>
-          <span v-for="c in chips" :key="c.id" class="chip">
-            {{ c.primaryText }}
-            <button type="button" aria-label="remove" @click.stop="pick(c.id)"><OsIcon icon="close" size="xs" /></button>
-          </span>
+  <div ref="root" class="os-select-multiple ds-anchor" data-testid="os-select-multiple">
+    <OsField :label="label" :error="error" :supporting-text="supportingText" :disabled="disabled" :readonly="readonly">
+      <div
+        class="os-select-multiple-input"
+        tabindex="0"
+        role="combobox"
+        data-testid="os-select-multiple-input"
+        :aria-expanded="open"
+        @click.prevent="!disabled && !readonly && (open = !open)"
+        @keydown.esc="open = false"
+      >
+        <div class="os-select-multiple-options-container">
+          <span v-if="!chips.length" class="os-select-multiple-placeholder">{{ placeholder }}</span>
+          <div v-for="c in chips" :key="c.id" class="os-multi-select-element">
+            <div class="os-multi-select-start"><span class="os-multi-select-text">{{ c.primaryText }}</span></div>
+            <div role="button" class="os-multi-select-remove-button" tabindex="-1" aria-label="remove" @click.stop="pick(c.id)">
+              <OsIcon icon="close" size="xs" color="secondary" />
+            </div>
+          </div>
         </div>
-        <OsIcon :icon="open ? 'arrow-drop-up' : 'arrow-drop-down'" color="secondary" />
+        <OsIcon :icon="open ? 'arrow-drop-up' : 'arrow-drop-down'" color="secondary" class="os-select-arrow" />
       </div>
-      <OsMenuList v-if="open" :options="options" :selected="modelValue" multiple :searchable="menu?.searchable ?? options.length > 8" @pick="pick" />
+      <template #floating>
+        <OsMenuList v-if="open" :options="options" :selected="modelValue" multiple :searchable="menu?.searchable ?? options.length > 8" @pick="pick" />
+      </template>
     </OsField>
   </div>
 </template>
-<style scoped>
-.os-select-multiple :deep(.os-input-group-field) { height: auto; min-height: 36px; }
-.os-select-input { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 3px 8px 3px 6px; cursor: pointer; outline: none; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; }
-.chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 8px; border-radius: 5px; background: var(--os-primary-t-100); color: var(--os-primary-1000); font-size: 13px; font-weight: 500; }
-.chip button { display: inline-flex; border: 0; background: none; color: inherit; cursor: pointer; padding: 2px; }
-.placeholder { color: var(--os-text-placeholder); font-size: 14px; padding-left: 6px; }
-</style>

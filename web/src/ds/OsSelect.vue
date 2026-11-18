@@ -24,20 +24,25 @@ function pick(id: string) {
 }
 </script>
 <template>
-  <div ref="root" class="os-select">
-    <OsField :label="label" :error="error" :supporting-text="supportingText" :disabled="disabled" :focused="open">
-      <div class="os-select-input" tabindex="0" role="combobox" :aria-expanded="open" @click.prevent="toggle" @keydown.enter.prevent="toggle" @keydown.esc="open = false">
-        <OsIcon v-if="current?.icon" :icon="current.icon" size="s" color="secondary" />
-        <span class="os-select-input-text" :class="{ placeholder: !current }">{{ loading ? '…' : current?.primaryText ?? placeholder }}</span>
-        <OsIcon :icon="open ? 'arrow-drop-up' : 'arrow-drop-down'" color="secondary" />
+  <div ref="root" class="os-select ds-anchor" data-testid="os-select">
+    <OsField :label="label" :error="error" :supporting-text="supportingText" :disabled="disabled" :readonly="readonly">
+      <div
+        class="os-select-input"
+        tabindex="0"
+        role="combobox"
+        data-testid="os-select-input"
+        :aria-expanded="open"
+        @click.prevent="toggle"
+        @keydown.enter.prevent="toggle"
+        @keydown.esc="open = false"
+      >
+        <div v-if="current?.icon" class="os-select-option-start-container"><OsIcon :icon="current.icon" size="s" color="secondary" /></div>
+        <span class="os-select-input-text" :class="{ placeholder: !current }">{{ loading ? '…' : (current?.primaryText ?? placeholder) }}</span>
+        <OsIcon :icon="open ? 'arrow-drop-up' : 'arrow-drop-down'" color="secondary" class="os-select-arrow" />
       </div>
-      <OsMenuList v-if="open" :options="options" :selected="modelValue ? [modelValue] : []" :searchable="searchable" @pick="pick" />
+      <template #floating>
+        <OsMenuList v-if="open" :options="options" :selected="modelValue ? [modelValue] : []" :searchable="searchable" @pick="pick" />
+      </template>
     </OsField>
   </div>
 </template>
-<style scoped>
-.os-select { min-width: 0; }
-.os-select-input { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 8px 0 12px; cursor: pointer; outline: none; }
-.os-select-input-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.placeholder { color: var(--os-text-placeholder); }
-</style>
