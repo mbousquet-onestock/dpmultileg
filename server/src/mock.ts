@@ -71,15 +71,15 @@ const r = (
 });
 
 export const mockRoutes: DeliveryRoute[] = [
-  r('r_wh_fr_colissimo', 'colissimo', 'home', 'z_wh_tls', 'z_fr', 24, 72, { pickup_timetable_id: 'tt_colissimo_pickup', delivery_timetable_id: 'tt_colissimo_delivery', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 6.5 } }),
+  r('r_wh_fr_colissimo', 'colissimo', 'home', 'z_wh_tls', 'z_fr', 24, 72, { pickup_timetable_id: 'tt_colissimo_pickup', delivery_timetable_id: 'tt_colissimo_delivery', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 6.5, shipping_fees: 4.99 } }),
   r('r_wh_eu_dhl', 'dhl', 'express', 'z_wh_tls', 'z_eu', 48, 96, { metric_values: { cost_by_parcel: 14 } }),
   r('r_wh_hub_paris', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_paris', 12, 24, { pickup_timetable_id: 'tt_geodis_pickup', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 1.2 } }),
-  r('r_hub_idf_sdd', 'stuart', 'same_day', 'z_hub_paris', 'z_idf', 2, 6, { pickup_timetable_id: 'tt_stuart_pickup', delivery_timetable_id: 'tt_stuart_delivery', metric_values: { cost_by_parcel: 9 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
+  r('r_hub_idf_sdd', 'stuart', 'same_day', 'z_hub_paris', 'z_idf', 2, 6, { pickup_timetable_id: 'tt_stuart_pickup', delivery_timetable_id: 'tt_stuart_delivery', metric_values: { cost_by_parcel: 9, shipping_fees: 9.90 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
   r('r_wh_hub_mrs', 'geodis', 'linehaul', 'z_wh_tls', 'z_hub_mrs', 8, 16, { pickup_timetable_id: 'tt_geodis_pickup', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 1 } }),
   r('r_hub_corse_ferry', 'corsica_ferries', 'fret', 'z_hub_mrs', 'z_corse', 24, 48, { metric_values: { cost_by_parcel: 7.5 } }),
   r('r_wh_stores_shuttle', 'store_shuttle', 'navette', 'z_wh_tls', 'z_stores_fr', 24, 48, { pickup_timetable_id: 'tt_shuttle_pickup', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 0.8 } }),
-  r('r_stores_idf_sdd', 'stuart', 'same_day', 'z_stores_idf', 'z_idf', 1, 3, { pickup_timetable_id: 'tt_stuart_pickup', delivery_timetable_id: 'tt_stuart_delivery', metric_values: { cost_by_parcel: 8 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
-  r('r_stores_fr_colissimo', 'colissimo', 'home', 'z_stores_fr', 'z_fr', 24, 48, { pickup_timetable_id: 'tt_colissimo_pickup', delivery_timetable_id: 'tt_colissimo_delivery', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 6.9 } }),
+  r('r_stores_idf_sdd', 'stuart', 'same_day', 'z_stores_idf', 'z_idf', 1, 3, { pickup_timetable_id: 'tt_stuart_pickup', delivery_timetable_id: 'tt_stuart_delivery', metric_values: { cost_by_parcel: 8, shipping_fees: 9.90 }, constraints: { parcel_constraints: [{ formula: 'sumW', op: '<=', value: 15 }] } }),
+  r('r_stores_fr_colissimo', 'colissimo', 'home', 'z_stores_fr', 'z_fr', 24, 48, { pickup_timetable_id: 'tt_colissimo_pickup', delivery_timetable_id: 'tt_colissimo_delivery', opening_timetable_id: 'tt_trucks_weekdays', metric_values: { cost_by_parcel: 6.9, shipping_fees: 4.99 } }),
   r('r_stores_stores', 'store_shuttle', 'interstore', 'z_stores_fr', 'z_stores_fr', 24, 48, { metric_values: { cost_by_parcel: 1.5 } }),
 ];
 

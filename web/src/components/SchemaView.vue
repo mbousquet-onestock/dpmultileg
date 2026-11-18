@@ -201,8 +201,12 @@ function chainLegs(a: SchemaAnalysis) {
             <span class="os-body-m os-text-secondary">{{ t('cutoff') }}</span>
             <span class="os-label-l">{{ formatDate(option.cutoff) }}</span>
           </div>
-          <div v-if="option.cost !== undefined" class="kpi">
+          <div v-if="option.shipping_fees !== undefined" class="kpi">
             <span class="os-body-m os-text-secondary">{{ t('cost') }}</span>
+            <span class="os-label-l">{{ formatMoney(option.shipping_fees, currency) }}</span>
+          </div>
+          <div v-if="option.cost !== undefined" class="kpi">
+            <span class="os-body-m os-text-secondary">{{ t('transportCost') }}</span>
             <span class="os-label-l">{{ formatMoney(option.cost, currency) }}</span>
           </div>
           <div v-if="option.shipment_number" class="kpi">

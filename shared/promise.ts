@@ -93,6 +93,8 @@ export interface SchemaAnalysis {
   /** Cost table row used for each leg. */
   costs?: { route_id: string; variant_id?: string; conditions?: string; cost?: number; carbon?: number; shipping_fees?: number; unknown: string[] }[];
   carbon?: number;
+  /** Shipping fees paid by the customer (metric shipping_fees of the cost table rows). */
+  shipping_fees?: number;
   cost?: number;
 }
 
@@ -101,6 +103,8 @@ export interface LocalPromiseOption extends PromiseOption {
   analysis: SchemaAnalysis[];
   /** Operations hours added to the transit. */
   operations_hours: number;
+  /** Shipping fees paid by the customer (sum of the shipping_fees of the selected cost table rows). */
+  shipping_fees?: number;
   /** Served by the stock of the collection store, without transport. */
   local_pickup?: boolean;
   /** Operations timed for a local pickup (at start + from destination). */
@@ -479,6 +483,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       costs,
       cost: costs.some((c) => c.cost !== undefined) ? costs.reduce((sum, c) => sum + (c.cost ?? 0), 0) : schemaCost(schema),
       carbon: costs.some((c) => c.carbon !== undefined) ? costs.reduce((sum, c) => sum + (c.carbon ?? 0), 0) : undefined,
+      shipping_fees: costs.some((c) => c.shipping_fees !== undefined) ? costs.reduce((sum, c) => sum + (c.shipping_fees ?? 0), 0) : undefined,
     };
   })
     .sort(byPriorities(order))
@@ -572,6 +577,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   );
   const cutoffs = shipments.map((s) => s.a.cutoff).filter((c): c is number => c !== undefined);
   const cost = shipments.reduce((sum, s) => sum + (s.a.cost ?? 0), 0);
+  const fees = shipments.some((s) => s.a.shipping_fees !== undefined) ? shipments.reduce((sum, s) => sum + (s.a.shipping_fees ?? 0), 0) : undefined;
   const carbon = shipments.reduce((sum, s) => sum + (s.a.carbon ?? criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
 
   return {
@@ -585,6 +591,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     eta_end: Math.max(...shipments.map((s) => s.a.eta_end)),
     cutoff: cutoffs.length ? Math.min(...cutoffs) : undefined,
     cost: Math.round(cost * 100) / 100,
+    shipping_fees: fees === undefined ? undefined : Math.round(fees * 100) / 100,
     carbon_footprint: carbon || undefined,
     shipment_number: shipments.length,
     line_items: excluded.length ? served : undefined,

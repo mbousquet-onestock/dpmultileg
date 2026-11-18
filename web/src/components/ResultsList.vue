@@ -41,7 +41,8 @@ function legsCount(o: PromiseOption): number {
             {{ formatRange(entry.option.eta_start, entry.option.eta_end) }}
           </span>
           <div class="facts os-body-s os-text-secondary">
-            <span v-if="entry.option.cost !== undefined">{{ t('cost') }} {{ formatMoney(entry.option.cost, currency) }}</span>
+            <span v-if="entry.option.shipping_fees !== undefined">{{ t('cost') }} {{ formatMoney(entry.option.shipping_fees, currency) }}</span>
+            <span v-if="entry.option.cost !== undefined">{{ t('transportCost') }} {{ formatMoney(entry.option.cost, currency) }}</span>
             <span v-if="entry.option.shipment_number">{{ entry.option.shipment_number }} {{ t('shipments').toLowerCase() }}</span>
             <span v-if="legsCount(entry.option) > 1" class="multileg">{{ legsCount(entry.option) }} {{ t('legs') }}</span>
             <span v-if="entry.option.carbon_footprint !== undefined">{{ entry.option.carbon_footprint }} gCO₂</span>

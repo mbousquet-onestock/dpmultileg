@@ -149,6 +149,19 @@ describe('priorities from the extension settings', () => {
   });
 });
 
+describe('shipping fees', () => {
+  it('estimated cost = shipping fees, transportation cost = cost by parcel, summed per shipment', () => {
+    const one = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
+    expect(one).toMatchObject({ cost: 6.5, shipping_fees: 4.99 });
+    const two = run('HD_standard', [
+      ['WATCH_STEEL_SV', 1],
+      ['PARKA_WINTER_KK_M', 1],
+    ]);
+    expect(two.shipment_number).toBe(2);
+    expect(two.shipping_fees).toBe(9.98);
+  });
+});
+
 describe('identical schemas', () => {
   it('shows once the schemas with the same carriers and zones (the orchestrator picks the location)', () => {
     const twin = { ...mockRoutes.find((r) => r.id === 'r_wh_fr_colissimo')!, id: 'r_wh_fr_colissimo_bis', metric_values: { cost_by_parcel: 9 } };
