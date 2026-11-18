@@ -176,9 +176,12 @@ export function restrictionMatchesItem(r: DeliveryRestriction, item: Item | unde
   if (!item) return undefined;
   if (hasCategory && (item.category_ids ?? []).some((c) => f!.category!.some((x) => c === x || c.startsWith(`${x}>`)))) return true;
   for (const [name, conds] of features) {
-    const values = attr(item, name);
+    // item fields (weight, length, width, height) take precedence over features with the same name
+    const field = (item as unknown as Record<string, unknown>)[name];
+    const values = typeof field === 'number' ? [field] : attr(item, name);
     if (!values) continue;
-    for (const cond of Object.values(conds ?? {})) {
+    // conditions: an array [{ op, value }] (GET /delivery_restrictions/{id}) or an object of conditions
+    for (const cond of (Array.isArray(conds) ? conds : Object.values(conds ?? {})) as { op: string; value?: unknown }[]) {
       if (values.some((v) => compare(cond.op, v, cond.value))) return true;
     }
   }
@@ -384,7 +387,8 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   const orderPrice = orderPriceOf(lines, items, input.price);
   const stock = input.stock ?? [];
   const order = prioritiesFor(config, input.sortOrders, input.salesChannel, settingsPriorities(input.settings, method)).order;
-  const applied = config.applied_restrictions?.length ? input.restrictions.filter((r) => config.applied_restrictions!.includes(r.id)) : input.restrictions;
+  // Only the restrictions applied by this delivery method (delivery_configs.applied_restrictions).
+  const applied = input.restrictions.filter((r) => config.applied_restrictions?.includes(r.id));
   const maxShipments = config.authorized_shipment_number ?? 4;
   const opsHours = operationsHours(config);
 

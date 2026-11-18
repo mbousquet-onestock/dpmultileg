@@ -170,6 +170,11 @@ function legLines(a: SchemaAnalysis): string[] {
   });
 }
 
+/** Kinds of exclusion of a schema (restriction, cost table, no stock, no slot), shown as badges. */
+function exclusionKinds(a: SchemaAnalysis): string[] {
+  return [...new Set(a.exclusions.map((e) => e.kind))];
+}
+
 /** Legs of a schema with the promise route of the first leg (to highlight the shipping stock location). */
 function chainLegs(a: SchemaAnalysis) {
   return a.schema.legs.map((l, k) => ({
@@ -271,6 +276,7 @@ function chainLegs(a: SchemaAnalysis) {
                 color="blue"
                 type="secondary"
               />
+              <OsBadge v-for="k in exclusionKinds(row.a)" :key="k" :text="t(`excl_${k}`)" color="red" type="secondary" />
               <OsBadge v-if="row.selected" :text="t('schemaSelected')" color="green" icon="check" />
             </span>
           </div>

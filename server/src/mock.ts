@@ -147,6 +147,7 @@ export const mockConfigs: DeliveryConfig[] = [
     sort_order: { sort_criterias: [{ field: 'eta_end', desc: false }] },
     operations: { before_shipping: ['pick_pack'] },
     global_execution_times: { pick_pack: 'et_pick_pack_1h' },
+    applied_restrictions: ['res_bulky_courier'],
   },
   {
     id: 'cfg_ckc',
@@ -368,6 +369,12 @@ const isStoreToStoreOnly = (s: { legs: { route: DeliveryRoute }[] }) => s.legs.l
 
 export function mockOnestock(method: string, path: string, body: Record<string, unknown>): unknown {
   const p = path.split('?')[0];
+  const resDetail = p.match(/^\/delivery_restrictions\/(.+)$/);
+  if (resDetail) {
+    const r = mockRestrictions.find((x) => x.id === decodeURIComponent(resDetail[1]));
+    if (!r) throw new Error('mock: restriction not found');
+    return { delivery_restriction: r };
+  }
   const etDetail = p.match(/^\/execution_times\/(.+)$/);
   if (etDetail) {
     const et = mockExecutionTimes.find((x) => x.id === decodeURIComponent(etDetail[1]));

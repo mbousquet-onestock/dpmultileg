@@ -187,5 +187,9 @@ export interface DeliveryRestriction {
   origin_zone_blacklist?: string[];
   origin_zone_whitelist?: string[];
   operator?: string;
-  item_filter?: { category?: string[]; feature?: Record<string, Record<string, { op: string; value?: unknown }>> };
+  item_filter?: {
+    category?: string[];
+    /** feature -> conditions, e.g. { weight: [{ op: 'gt', value: 30 }] } */
+    feature?: Record<string, { op: string; value?: unknown }[] | Record<string, { op: string; value?: unknown }>>;
+  };
 }

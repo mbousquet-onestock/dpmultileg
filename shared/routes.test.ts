@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeRoutes } from './normalize.js';
-import { selectVariant } from './promise.js';
+import { restrictionMatchesItem, selectVariant } from './promise.js';
+import { restrictionsForRoute } from './logistics.js';
 import type { Item } from './types.js';
 
 const tt = { pickup_timetable_id: '2dced4fc-51b2-4d6c-8bb0-3523abbe4f13', opening_timetable_id: 'a1bbe9f2-5259-4b50-bada-b6bc45fd6db4', delivery_timetable_id: '6e3ff3b2-d9c8-4fa7-8127-4061443a2a6b' };
@@ -118,6 +119,21 @@ describe('GET /delivery_routes groups', () => {
     const choice = selectVariant(capped, [{ item_id: 'fridge', qty: 1 }], items, 60);
     expect(choice.variant).toBeUndefined();
     expect(choice.failure).toContain('W = 55');
+  });
+
+  it('applies the delivery restriction of the method: weight > 30 forbids colissimov2 · DOM', () => {
+    // Real GET /delivery_restrictions/{id} response
+    const restriction = {
+      id: '67f510169b16306dddda5fd2',
+      item_filter: { feature: { weight: [{ op: 'gt', value: 30 }] } },
+      carrier_blacklist: [{ name: 'colissimov2', option: 'DOM' }],
+      version: 13,
+    };
+    expect(restrictionsForRoute(route, [restriction]).map((r) => r.id)).toEqual(['67f510169b16306dddda5fd2']);
+    // the 55 kg weight comes from the item field, not from the stray 0.001 feature
+    const fridge: Item = { id: '00003', weight: 55, attributes: { weight: [0.001] } };
+    expect(restrictionMatchesItem(restriction, fridge)).toBe(true);
+    expect(restrictionMatchesItem(restriction, { id: 'toaster', weight: 2, attributes: {} })).toBe(false);
   });
 });
 

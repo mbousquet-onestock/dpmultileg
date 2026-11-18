@@ -597,7 +597,34 @@ async function loadReferential(t: Target, requestId?: string) {
   // Priorities (sort orders), carrier restrictions and scheduled events are not loaded: the priorities come
   // from the configuration when present, else the OneStock default rule (the fastest, end of delivery slot).
   const sortOrders: SortOrder[] = [];
-  const restrictions: DeliveryRestriction[] = [];
+  // Delivery restrictions applied by the delivery methods (delivery_configs.applied_restrictions), fetched by id.
+  const restrictionIds = [...new Set(configs.flatMap((c) => c.applied_restrictions ?? []))];
+  const restrictions = await step(
+    'delivery_restrictions',
+    `GET /delivery_restrictions/{id} (${restrictionIds.length})`,
+    async () =>
+      inBatches(restrictionIds.slice(0, 100), async (id) => {
+        try {
+          const res = (await callOnestock(t, 'GET', `/delivery_restrictions/${encodeURIComponent(id)}`)) as Record<string, unknown>;
+          const r = (res?.delivery_restriction ?? res) as DeliveryRestriction;
+          return r && typeof r === 'object' ? { ...r, id: String(r.id ?? id) } : undefined;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          errors.set('delivery_restrictions', [...(errors.get('delivery_restrictions') ?? []), msg]);
+          return undefined;
+        }
+      }),
+    (rs) =>
+      rs
+        .map((r) => {
+          const carriers = (r.carrier_blacklist ?? []).map((c) => `${c.name} · ${c.option}`).join(', ');
+          const feats = Object.entries(r.item_filter?.feature ?? {})
+            .map(([k, v]) => `${k} ${(Array.isArray(v) ? v : Object.values(v)).map((c) => `${c.op} ${c.value}`).join(' / ')}`)
+            .join(', ');
+          return `${carriers || '—'}${feats ? ` if ${feats}` : ''}`;
+        })
+        .join(' · '),
+  );
   const scheduledEvents: ScheduledEvent[] = [];
 
   log('info', 'referential_loaded', { request_id: requestId, steps: report.map((r) => `${r.step}:${r.ok ? r.count : 'KO'}`).join(' ') });
