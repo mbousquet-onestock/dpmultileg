@@ -366,6 +366,12 @@ const isStoreToStoreOnly = (s: { legs: { route: DeliveryRoute }[] }) => s.legs.l
 
 export function mockOnestock(method: string, path: string, body: Record<string, unknown>): unknown {
   const p = path.split('?')[0];
+  const etDetail = p.match(/^\/execution_times\/(.+)$/);
+  if (etDetail) {
+    const et = mockExecutionTimes.find((x) => x.id === decodeURIComponent(etDetail[1]));
+    if (!et) throw new Error('mock: execution time not found');
+    return { execution_time: et };
+  }
   const ttDetail = p.match(/^\/timetables\/(.+)$/);
   if (ttDetail) {
     const tt = mockTimetables.find((x) => x.id === decodeURIComponent(ttDetail[1]));

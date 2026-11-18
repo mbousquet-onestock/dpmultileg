@@ -73,8 +73,8 @@ export function addLine(item: Item, qty = 1) {
   else state.lines.push({ item, qty });
 }
 
-export async function loadReferential() {
-  state.referential = await api.referential();
+export async function loadReferential(refresh = false) {
+  state.referential = await api.referential(refresh);
   if (!state.salesChannel && salesChannels.value.length) state.salesChannel = salesChannels.value[0].id;
 }
 

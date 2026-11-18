@@ -8,6 +8,7 @@ import OptionsSection from './components/OptionsSection.vue';
 import ResultsList from './components/ResultsList.vue';
 import SchemaView from './components/SchemaView.vue';
 import ErrorPanel from './components/ErrorPanel.vue';
+import LoadReport from './components/LoadReport.vue';
 import StandaloneConnect from './components/StandaloneConnect.vue';
 import { autoResize, handshake, isEmbedded, readParams } from './extension';
 import { setLocale, t } from './i18n';
@@ -161,7 +162,8 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
 
     <ErrorPanel v-else-if="phase === 'error'" :error="error" :step="step" :context="context" @configure="openConfig" />
 
-    <div v-else class="layout">
+    <LoadReport v-if="phase === 'ready'" />
+    <div v-if="phase === 'ready'" class="layout">
       <div class="form">
         <section>
           <h2 class="os-label-l section-title">{{ t('items') }}</h2>

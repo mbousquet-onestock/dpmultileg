@@ -12,6 +12,7 @@ export interface Referential {
   timetables?: Timetable[];
   scheduled_events?: ScheduledEvent[];
   execution_times?: ExecutionTime[];
+  load_report?: { step: string; path: string; ok: boolean; count: number; ms: number; detail?: string; error?: string }[];
 }
 
 export interface SessionInfo {
@@ -130,7 +131,7 @@ export const api = {
   },
   environments: (siteId: string) =>
     request<{ environments: { site_id: string; environment: string; label: string | null }[] }>('GET', `/standalone/environments?site_id=${encodeURIComponent(siteId)}`),
-  referential: () => request<Referential>('GET', '/referential'),
+  referential: (refresh = false) => request<Referential>('GET', `/referential${refresh ? '?refresh=1' : ''}`),
   searchItems: (pattern: string, lang: string, start = 0) => request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit: 20 }),
   stocks: (itemIds: string[], endpointIds: string[]) =>
     request<{ stocks: { endpoint_id: string; item_id: string; quantity: number; type?: string }[] }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),

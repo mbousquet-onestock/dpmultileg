@@ -1,6 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
-import { collectStockLines } from '../../shared/logistics.js';
+import { collectStockLines, sameCarrier } from '../../shared/logistics.js';
 import { normalizeTimetable, type ExecutionTime, type ScheduledEvent, type Timetable } from '../../shared/timetables.js';
 import { asList, normalizeRoutes } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
@@ -162,85 +162,22 @@ export function apiRouter(): Router {
     void requireSession(req, res, next);
   });
 
+  /**
+   * Referential of the local delivery promise, loaded in this order:
+   *  1. GET /delivery_configs     -> delivery methods, carriers / options, delivery zones, operations, execution times
+   *  2. GET /delivery_routes      -> routes (cost table groups) of these carriers; GET /zones, GET /endpoints
+   *  3. GET /execution_times/{id} -> for each id of global_execution_times (and of the stock locations)
+   *  4. GET /timetables/{id}      -> timetables of the routes (pickup / transit / delivery) and of the execution times
+   * A load report (count / error per step) is returned to diagnose a configuration.
+   * ?refresh=1 reloads everything (caches of the site / environment cleared).
+   */
   r.get(
     '/referential',
     wrap(async (req, res) => {
       const t = target(req.session!);
-      const [configs, routes, zones, salesChannels] = await Promise.all([
-        cached(t, 'delivery_configs', async () => asList<DeliveryConfig>(await callOnestock(t, 'GET', '/delivery_configs'), 'delivery_configs')),
-        cached(t, 'delivery_routes', async () => normalizeRoutes(await callOnestock(t, 'GET', '/delivery_routes'))),
-        cached(t, 'zones', async () => asList<Zone>(await callOnestock(t, 'GET', '/zones'), 'zones')),
-        cached(t, 'sales_channels', async () => {
-          try {
-            return asList<SalesChannel>(await callOnestock(t, 'GET', '/sales_channels'), 'sales_channels', 'sales_channel');
-          } catch {
-            return [] as SalesChannel[]; // optional: fall back to the ids found in delivery configs
-          }
-        }),
-      ]);
-      // All stock locations: zones may be geographic (countries, zip codes) and the local delivery promise
-      // needs every candidate origin. Paginated, capped to keep the referential reasonable.
-      const endpoints = await cached(t, 'endpoints:all', async () => {
-        const all: Endpoint[] = [];
-        for (let start = 0; start < 3000; start += 100) {
-          const page = await fetchEndpoints(t, {}, start);
-          all.push(...page);
-          if (page.length < 100) break;
-        }
-        // Endpoints referenced by zones but not returned (other pagination, filters...)
-        const missing = [...new Set(zones.flatMap((z) => z.included_endpoint_ids ?? []))].filter((id) => !all.some((e) => e.id === id));
-        if (missing.length) all.push(...(await fetchEndpoints(t, { endpoint_ids: missing.slice(0, 100) }, 0)));
-        return all;
-      });
-      // Optional referential explaining the choices (internal routes: tolerate missing rights / versions).
-      const optional = async <T extends { id: string }>(name: string, path: string, key: string): Promise<T[]> =>
-        cached(t, name, async () => {
-          try {
-            return asList<T>(await callOnestock(t, 'GET', path), key);
-          } catch (e) {
-            log('warn', 'optional_referential_unavailable', { request_id: req.requestId, path, error: e instanceof Error ? e.message : String(e) });
-            return [] as T[];
-          }
-        });
-      // Execution times of the operations (duration + execution_time_timetable).
-      const executionTimes = optional<ExecutionTime>('execution_times', '/execution_times', 'execution_times');
-      const [sortOrders, restrictions, timetables, scheduledEvents, executionTimesList] = await Promise.all([
-        optional<SortOrder>('sort_orders', '/sort_orders', 'sort_orders'),
-        optional<DeliveryRestriction>('delivery_restrictions', '/delivery_restrictions', 'delivery_restrictions'),
-        cached(t, 'timetables', async () =>
-          fetchCarrierTimetables(
-            t,
-            routes,
-            req.requestId,
-            (await executionTimes).map((e) => e.timetable_id).filter((x): x is string => !!x),
-          ),
-        ),
-        cached(t, 'scheduled_events', async () => {
-          try {
-            const now = Math.floor(Date.now() / 1000);
-            return asList<ScheduledEvent>(
-              await callOnestock(t, 'GET', '/scheduledevents', { filters: { from: now - 86400, to: now + 60 * 86400 } }),
-              'scheduled_events',
-            );
-          } catch (e) {
-            log('warn', 'optional_referential_unavailable', { request_id: req.requestId, path: '/scheduledevents', error: e instanceof Error ? e.message : String(e) });
-            return [] as ScheduledEvent[];
-          }
-        }),
-        executionTimes,
-      ]);
-      res.json({
-        delivery_configs: configs,
-        delivery_routes: routes,
-        zones,
-        sales_channels: salesChannels,
-        endpoints,
-        sort_orders: sortOrders,
-        delivery_restrictions: restrictions,
-        timetables,
-        scheduled_events: scheduledEvents,
-        execution_times: executionTimesList,
-      });
+      if (req.query.refresh) clearSiteCaches(t.site_id, t.environment);
+      const result = await cached(t, 'referential', () => loadReferential(t, req.requestId));
+      res.json(result);
     }),
   );
 
@@ -440,59 +377,183 @@ export function apiRouter(): Router {
   return r;
 }
 
-const CARRIER_TIMETABLE_TYPES = ['carrier_pickup_timetable', 'carrier_transit_timetable', 'carrier_delivery_timetable', 'execution_time_timetable'];
+interface LoadStep {
+  step: string;
+  path: string;
+  ok: boolean;
+  count: number;
+  ms: number;
+  detail?: string;
+  error?: string;
+}
 
-/**
- * Carrier timetables with their weekly slots (hours.timespans). GET /timetables is called per type; timetables
- * referenced by the routes but returned without hours are fetched one by one (GET /timetables/{id}).
- */
-async function fetchCarrierTimetables(
-  t: { site_id: string; environment: string; api_url: string },
-  routes: DeliveryRoute[],
-  requestId?: string,
-  extraIds: string[] = [],
-): Promise<Timetable[]> {
-  // 1. list per type (ids, names, types: the list does not return the slots)
-  const byId = new Map<string, Timetable>();
-  for (const type of CARRIER_TIMETABLE_TYPES) {
+type Target = { site_id: string; environment: string; api_url: string };
+
+async function loadReferential(t: Target, requestId?: string) {
+  const report: LoadStep[] = [];
+  const step = async <T>(name: string, path: string, fn: () => Promise<T[]>, detail?: (v: T[]) => string): Promise<T[]> => {
+    const started = Date.now();
     try {
-      const res = await callOnestock(t, 'GET', '/timetables', { filters: { type } });
-      for (const tt of asList<Timetable>(res, 'timetables')) byId.set(tt.id, { ...tt, type: tt.type ?? type });
+      const value = await fn();
+      report.push({ step: name, path, ok: true, count: value.length, ms: Date.now() - started, detail: detail?.(value) });
+      return value;
     } catch (e) {
-      log('warn', 'optional_referential_unavailable', { request_id: requestId, path: `/timetables (${type})`, error: e instanceof Error ? e.message : String(e) });
+      const error = e instanceof Error ? e.message : String(e);
+      report.push({ step: name, path, ok: false, count: 0, ms: Date.now() - started, error });
+      log('warn', 'referential_step_failed', { request_id: requestId, step: name, path, error });
+      return [];
     }
-  }
-  // timetables referenced by the routes / execution times but absent from the lists
-  for (const r of routes)
-    for (const [k, v] of Object.entries(r as unknown as Record<string, unknown>))
-      if (/timetable/i.test(k)) for (const id of Array.isArray(v) ? v : [v]) if (typeof id === 'string' && id && !byId.has(id)) byId.set(id, { id });
-  for (const id of extraIds) if (!byId.has(id)) byId.set(id, { id });
+  };
 
-  // 2. detail of each timetable: slots (hours / current_timetable) and routes using it
-  const ids = [...byId.keys()].slice(0, 200);
-  for (let i = 0; i < ids.length; i += 10) {
-    await Promise.all(
-      ids.slice(i, i + 10).map(async (id) => {
+  // 1. delivery configurations
+  const configs = await step('delivery_configs', 'GET /delivery_configs', async () =>
+    asList<DeliveryConfig>(await callOnestock(t, 'GET', '/delivery_configs'), 'delivery_configs'),
+  );
+  const carriers = configs.flatMap((c) => c.carriers ?? []);
+
+  // 2. routes, zones, stock locations, sales channels
+  const [routes, zones, salesChannels] = await Promise.all([
+    step(
+      'delivery_routes',
+      'GET /delivery_routes',
+      async () => normalizeRoutes(await callOnestock(t, 'GET', '/delivery_routes')),
+      (rs) => {
+        const matching = rs.filter((r) => carriers.some((c) => sameCarrier(c, r.carrier))).length;
+        const unmatched = [...new Set(carriers.filter((c) => !rs.some((r) => sameCarrier(c, r.carrier))).map((c) => `${c.name} · ${c.option}`))];
+        return `${matching} route(s) for the carriers of the configurations${unmatched.length ? `; no route for: ${unmatched.join(', ')}` : ''}`;
+      },
+    ),
+    step('zones', 'GET /zones', async () => asList<Zone>(await callOnestock(t, 'GET', '/zones'), 'zones'), (zs) => {
+      const wanted = new Set([...configs.flatMap((c) => c.delivery_zone_ids ?? [])]);
+      const missing = [...wanted].filter((z) => !zs.some((x) => x.id === z));
+      return missing.length ? `zones of the configurations not found: ${missing.join(', ')}` : '';
+    }),
+    step('sales_channels', 'GET /sales_channels', async () => asList<SalesChannel>(await callOnestock(t, 'GET', '/sales_channels'), 'sales_channels', 'sales_channel')),
+  ]);
+  const endpoints = await step('endpoints', 'GET /endpoints', async () => {
+    const all: Endpoint[] = [];
+    for (let start = 0; start < 3000; start += 100) {
+      const page = await fetchEndpoints(t, {}, start);
+      all.push(...page);
+      if (page.length < 100) break;
+    }
+    const missing = [...new Set(zones.flatMap((z) => z.included_endpoint_ids ?? []))].filter((id) => !all.some((e) => e.id === id));
+    if (missing.length) all.push(...(await fetchEndpoints(t, { endpoint_ids: missing.slice(0, 100) }, 0)));
+    return all;
+  });
+
+  // 3. execution times referenced by the configurations (global_execution_times) and the stock locations
+  const etIds = [
+    ...new Set([
+      ...configs.flatMap((c) => Object.values((c.global_execution_times ?? {}) as Record<string, unknown>)),
+      ...endpoints.flatMap((e) => (e.execution_times ?? []).map((x) => x.id)),
+    ]),
+  ].filter((x): x is string => typeof x === 'string' && !!x);
+  const executionTimes = await step(
+    'execution_times',
+    `GET /execution_times/{id} (${etIds.length})`,
+    async () => {
+      const list = await inBatches(etIds.slice(0, 100), async (id) => {
         try {
-          const res = await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, {
-            fields: ['id', 'name', 'type', 'hours', 'current_timetable', 'routes'],
-          });
-          const tt = normalizeTimetable(res, id);
-          if (tt) byId.set(id, { ...byId.get(id), ...tt, type: tt.type ?? byId.get(id)?.type });
+          const res = (await callOnestock(t, 'GET', `/execution_times/${encodeURIComponent(id)}`)) as Record<string, unknown>;
+          const o = (res?.execution_time ?? res) as ExecutionTime;
+          return o && typeof o === 'object' ? { ...o, id: String(o.id ?? (o as unknown as Record<string, unknown>)._id ?? id) } : undefined;
+        } catch (e) {
+          log('warn', 'execution_time_unavailable', { request_id: requestId, id, error: e instanceof Error ? e.message : String(e) });
+          return undefined;
+        }
+      });
+      // ids not found one by one: try the list
+      if (list.length < etIds.length) {
+        try {
+          for (const et of asList<ExecutionTime>(await callOnestock(t, 'GET', '/execution_times'), 'execution_times'))
+            if (!list.some((x) => x.id === et.id)) list.push(et);
+        } catch {
+          /* list not available */
+        }
+      }
+      return list;
+    },
+    (ets) => {
+      const missing = etIds.filter((id) => !ets.some((e) => e.id === id));
+      return [ets.map((e) => `${e.operation ?? e.name ?? e.id}: ${e.duration ?? '?'}`).join(', '), missing.length ? `not found: ${missing.join(', ')}` : '']
+        .filter(Boolean)
+        .join(' · ');
+    },
+  );
+
+  // 4. timetables of the routes (pickup / transit / delivery) and of the execution times
+  const ttIds = [
+    ...new Set([
+      ...routes.flatMap((r) =>
+        Object.entries(r as unknown as Record<string, unknown>)
+          .filter(([k]) => /timetable/i.test(k))
+          .flatMap(([, v]) => (Array.isArray(v) ? v : [v])),
+      ),
+      ...executionTimes.map((e) => e.timetable_id),
+    ]),
+  ].filter((x): x is string => typeof x === 'string' && !!x);
+  const timetables = await step(
+    'timetables',
+    `GET /timetables/{id} (${ttIds.length})`,
+    async () =>
+      inBatches(ttIds.slice(0, 200), async (id) => {
+        try {
+          const res = await callOnestock(t, 'GET', `/timetables/${encodeURIComponent(id)}`, { fields: ['id', 'name', 'type', 'hours', 'current_timetable', 'routes'] });
+          return normalizeTimetable(res, id);
         } catch (e) {
           log('warn', 'timetable_unavailable', { request_id: requestId, timetable_id: id, error: e instanceof Error ? e.message : String(e) });
+          return undefined;
         }
       }),
-    );
-  }
-  const list = [...byId.values()];
-  log('info', 'timetables_loaded', {
-    request_id: requestId,
-    count: list.length,
-    with_slots: list.filter((x) => x.hours?.timespans?.length).length,
-    linked_to_routes: list.filter((x) => Array.isArray(x.routes) && x.routes.length).length,
-  });
-  return list;
+    (tts) => {
+      const byType = new Map<string, number>();
+      for (const x of tts) byType.set(x.type ?? '?', (byType.get(x.type ?? '?') ?? 0) + 1);
+      const noSlots = tts.filter((x) => !x.hours?.timespans?.length).map((x) => x.name ?? x.id);
+      const missing = ttIds.filter((id) => !tts.some((x) => x.id === id));
+      return [
+        [...byType.entries()].map(([k, v]) => `${k}: ${v}`).join(', '),
+        noSlots.length ? `without slots: ${noSlots.join(', ')}` : '',
+        missing.length ? `not found: ${missing.join(', ')}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
+    },
+  );
+
+  // Optional: priorities, restrictions, closures
+  const now = Math.floor(Date.now() / 1000);
+  const [sortOrders, restrictions, scheduledEvents] = await Promise.all([
+    step('sort_orders', 'GET /sort_orders', async () => asList<SortOrder>(await callOnestock(t, 'GET', '/sort_orders'), 'sort_orders')),
+    step('delivery_restrictions', 'GET /delivery_restrictions', async () =>
+      asList<DeliveryRestriction>(await callOnestock(t, 'GET', '/delivery_restrictions'), 'delivery_restrictions'),
+    ),
+    step('scheduled_events', 'GET /scheduledevents', async () =>
+      asList<ScheduledEvent>(await callOnestock(t, 'GET', '/scheduledevents', { filters: { from: now - 86400, to: now + 60 * 86400 } }), 'scheduled_events'),
+    ),
+  ]);
+
+  log('info', 'referential_loaded', { request_id: requestId, steps: report.map((r) => `${r.step}:${r.ok ? r.count : 'KO'}`).join(' ') });
+  return {
+    delivery_configs: configs,
+    delivery_routes: routes,
+    zones,
+    sales_channels: salesChannels,
+    endpoints,
+    sort_orders: sortOrders,
+    delivery_restrictions: restrictions,
+    timetables,
+    scheduled_events: scheduledEvents,
+    execution_times: executionTimes,
+    load_report: report,
+  };
+}
+
+/** Run calls by batches of 10, dropping undefined results. */
+async function inBatches<T, R>(list: T[], fn: (x: T) => Promise<R | undefined>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < list.length; i += 10) out.push(...((await Promise.all(list.slice(i, i + 10).map(fn))).filter((x) => x !== undefined) as R[]));
+  return out;
 }
 
 async function fetchEndpoints(t: { site_id: string; environment: string; api_url: string }, filter: Record<string, unknown>, start = 0): Promise<Endpoint[]> {
