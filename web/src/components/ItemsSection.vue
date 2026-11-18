@@ -73,7 +73,9 @@ const price = (i: Item) => (i.price !== undefined && i.price !== '' && !Number.i
           <OsIcon v-else icon="item" color="secondary" size="l" />
         </div>
         <div class="name os-label-l" :title="line.item.name ?? line.item.id">{{ line.item.name ?? line.item.id }}</div>
-        <div class="os-body-s os-text-secondary ref" :title="line.item.id">{{ line.item.id }}</div>
+        <div class="os-body-s os-text-secondary ref" :title="line.item.id">
+          {{ line.item.id }}<template v-if="line.item.weight !== undefined"> · {{ line.item.weight }} kg</template>
+        </div>
         <OsInputNumber v-model="line.qty" :min="1" :step="1" class="qty" :label="t('quantity')" />
       </div>
       <button type="button" class="item-card add" @click="open = true">

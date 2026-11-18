@@ -153,6 +153,11 @@ export interface Item {
   price?: number | string;
   features?: Record<string, Record<string, unknown[]>>;
   category_ids?: string[];
+  /** Physical data (item fields, used for carrier requests and route constraints). */
+  weight?: number;
+  length?: number;
+  width?: number;
+  height?: number;
   /** Features of the item in the current language (used to evaluate restrictions and parcel constraints). */
   attributes?: Record<string, unknown[]>;
 }

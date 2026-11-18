@@ -6,7 +6,8 @@ import type { Destination, Item } from './types.js';
 
 const ctx: ZoneContext = { zones: new Map(mockZones.map((z) => [z.id, z])), endpoints: new Map(mockEndpoints.map((e) => [e.id, e])) };
 // Items as returned by /api/items/search (attributes = features of the language)
-const items = new Map<string, Item>(mockItems.map((i) => [i.id, { ...i, attributes: i.features?.fr }]));
+// Items as returned by /api/items/search: features of the language + item fields (weight)
+const items = new Map<string, Item>(mockItems.map((i) => [i.id, { ...i, attributes: { ...i.features?.fr, ...(i.weight !== undefined ? { weight: [i.weight] } : {}) } }]));
 const stock = [
   ...mockItems.filter((i) => i.id !== 'WATCH_STEEL_SV').map((i) => ({ endpoint_id: 'WH_TLS', item_id: i.id, quantity: 50, type: 'on_hand' })),
   { endpoint_id: 'ST_PARIS', item_id: 'SCARF_WOOL_RD', quantity: 4, type: 'on_hand' },

@@ -56,6 +56,7 @@ const response = {
 const items = new Map<string, Item>([
   ['light', { id: 'light', price: 40, attributes: { weight: [3] } }],
   ['tiny', { id: 'tiny', price: 5, attributes: { weight: [0.5] } }],
+  ['fridge', { id: 'fridge', price: 60, weight: 55, attributes: { weight: [55] } }],
   ['heavy', { id: 'heavy', price: 40, attributes: { weight: [12] } }],
   ['noweight', { id: 'noweight', price: 150, attributes: {} }],
 ]);
@@ -105,4 +106,18 @@ describe('GET /delivery_routes groups', () => {
     expect(choice.variant).toBeDefined();
     expect(choice.unknown).toContain('W ≥ 10');
   });
+
+  it('a 55 kg item: the W >= 10 row of this table applies (no upper weight limit in it)', () => {
+    expect(selectVariant(route, [{ item_id: 'fridge', qty: 1 }], items, 60).variant?.id).toBe('67e5505e6eed8a73e7a0afe0');
+  });
+
+  it('a route with a maximum weight excludes a 55 kg item', () => {
+    const capped = normalizeRoutes([
+      { ...response, routes: [{ routes: [row('cap', 7, 5.99, [{ formula: 'W', op: 'lt', value: 30 }], priceLt)], order_constraints: priceLt }] },
+    ])[0];
+    const choice = selectVariant(capped, [{ item_id: 'fridge', qty: 1 }], items, 60);
+    expect(choice.variant).toBeUndefined();
+    expect(choice.failure).toContain('W = 55');
+  });
 });
+

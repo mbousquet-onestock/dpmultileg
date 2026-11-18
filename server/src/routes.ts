@@ -204,6 +204,8 @@ export function apiRouter(): Router {
       const payload: Record<string, unknown> = {
         // Weight / dimensions / flags are needed to evaluate carrier restrictions and parcel constraints.
         features: ['name', 'image', 'image_url', 'price', 'color', 'size', 'weight', 'W', 'length', 'width', 'height', 'd1', 'd2', 'd3', 'volume', 'bulky', 'hazardous', 'category'],
+        // Physical data are item fields (not features): needed for the weight / dimension constraints of the routes.
+        fields: ['weight', 'length', 'width', 'height', 'product_id', 'is_default', 'category_ids'],
         lang,
         get_total: true,
         pagination: { start: Number(req.body?.start ?? 0), limit: Math.min(Number(req.body?.limit ?? 10), 50) },
@@ -639,7 +641,15 @@ function simplifyItem(i: Item, lang: string): Item {
     image: first('image_url') ?? first('image') ?? i.image,
     price: first('price') ?? i.price,
     category_ids: i.category_ids,
-    attributes: f as Record<string, unknown[]>,
+    weight: i.weight,
+    length: i.length,
+    width: i.width,
+    height: i.height,
+    // Item fields (weight, dimensions) take precedence over features with the same name.
+    attributes: {
+      ...(f as Record<string, unknown[]>),
+      ...Object.fromEntries((['weight', 'length', 'width', 'height'] as const).filter((k) => typeof i[k] === 'number').map((k) => [k, [i[k]]])),
+    },
   };
 }
 

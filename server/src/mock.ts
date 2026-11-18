@@ -208,7 +208,9 @@ export const mockSalesChannels: SalesChannel[] = [
 
 const item = (id: string, name: string, price: number, color: string, weight = 1, bulky = false): Item => {
   const f = { name: [name], price: [String(price)], color: [color], weight: [weight], bulky: [bulky] };
-  return { id, product_id: id.split('_').slice(0, 2).join('_'), category_ids: [bulky ? 'home>furniture' : 'fashion'], features: { fr: f, en: f } };
+  // weight is an item field (GET /items fields: weight), not a feature
+  const { weight: _w, ...features } = f;
+  return { id, product_id: id.split('_').slice(0, 2).join('_'), category_ids: [bulky ? 'home>furniture' : 'fashion'], weight, features: { fr: features, en: features } };
 };
 
 export const mockItems: Item[] = [
