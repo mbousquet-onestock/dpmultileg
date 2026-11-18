@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { collectStockLines } from '../../shared/logistics.js';
-import type { ScheduledEvent, Timetable } from '../../shared/timetables.js';
+import type { ExecutionTime, ScheduledEvent, Timetable } from '../../shared/timetables.js';
 import { asList } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
 import { config, configProblems } from './config.js';
@@ -202,10 +202,19 @@ export function apiRouter(): Router {
             return [] as T[];
           }
         });
-      const [sortOrders, restrictions, timetables, scheduledEvents] = await Promise.all([
+      // Execution times of the operations (duration + execution_time_timetable).
+      const executionTimes = optional<ExecutionTime>('execution_times', '/execution_times', 'execution_times');
+      const [sortOrders, restrictions, timetables, scheduledEvents, executionTimesList] = await Promise.all([
         optional<SortOrder>('sort_orders', '/sort_orders', 'sort_orders'),
         optional<DeliveryRestriction>('delivery_restrictions', '/delivery_restrictions', 'delivery_restrictions'),
-        cached(t, 'timetables', () => fetchCarrierTimetables(t, routes, req.requestId)),
+        cached(t, 'timetables', async () =>
+          fetchCarrierTimetables(
+            t,
+            routes,
+            req.requestId,
+            (await executionTimes).map((e) => e.timetable_id).filter((x): x is string => !!x),
+          ),
+        ),
         cached(t, 'scheduled_events', async () => {
           try {
             const now = Math.floor(Date.now() / 1000);
@@ -218,6 +227,7 @@ export function apiRouter(): Router {
             return [] as ScheduledEvent[];
           }
         }),
+        executionTimes,
       ]);
       res.json({
         delivery_configs: configs,
@@ -229,6 +239,7 @@ export function apiRouter(): Router {
         delivery_restrictions: restrictions,
         timetables,
         scheduled_events: scheduledEvents,
+        execution_times: executionTimesList,
       });
     }),
   );
@@ -429,13 +440,18 @@ export function apiRouter(): Router {
   return r;
 }
 
-const CARRIER_TIMETABLE_TYPES = ['carrier_pickup_timetable', 'carrier_transit_timetable', 'carrier_delivery_timetable'];
+const CARRIER_TIMETABLE_TYPES = ['carrier_pickup_timetable', 'carrier_transit_timetable', 'carrier_delivery_timetable', 'execution_time_timetable'];
 
 /**
  * Carrier timetables with their weekly slots (hours.timespans). GET /timetables is called per type; timetables
  * referenced by the routes but returned without hours are fetched one by one (GET /timetables/{id}).
  */
-async function fetchCarrierTimetables(t: { site_id: string; environment: string; api_url: string }, routes: DeliveryRoute[], requestId?: string): Promise<Timetable[]> {
+async function fetchCarrierTimetables(
+  t: { site_id: string; environment: string; api_url: string },
+  routes: DeliveryRoute[],
+  requestId?: string,
+  extraIds: string[] = [],
+): Promise<Timetable[]> {
   const byId = new Map<string, Timetable>();
   for (const type of CARRIER_TIMETABLE_TYPES) {
     try {
@@ -449,6 +465,7 @@ async function fetchCarrierTimetables(t: { site_id: string; environment: string;
   for (const r of routes)
     for (const [k, v] of Object.entries(r as unknown as Record<string, unknown>))
       if (/timetable/i.test(k)) for (const id of Array.isArray(v) ? v : [v]) if (typeof id === 'string' && id) referenced.add(id);
+  for (const id of extraIds) referenced.add(id);
   const missing = [...referenced].filter((id) => !byId.get(id)?.hours?.timespans).slice(0, 80);
   await Promise.all(
     missing.map(async (id) => {
@@ -467,7 +484,7 @@ async function fetchCarrierTimetables(t: { site_id: string; environment: string;
 async function fetchEndpoints(t: { site_id: string; environment: string; api_url: string }, filter: Record<string, unknown>, start = 0): Promise<Endpoint[]> {
   const res = await callOnestock(t, 'GET', '/endpoints', {
     ...filter,
-    fields: ['_id', 'name', 'classification', 'timezone', 'address', 'address.zip_code', 'address.city', 'address.regions'],
+    fields: ['_id', 'name', 'classification', 'timezone', 'address', 'address.zip_code', 'address.city', 'address.regions', 'opening_hours', 'execution_times'],
     pagination: { start, limit: 100 },
   });
   return asList<Endpoint>(res, 'endpoints');

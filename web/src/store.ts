@@ -130,6 +130,7 @@ export async function runTest() {
       price: state.price.enabled ? state.price.value : undefined,
       timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
       events: ref.scheduled_events ?? [],
+      executionTimes: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
     });
     state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');

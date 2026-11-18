@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mockConfigs, mockEndpoints, mockItems, mockRestrictions, mockRoutes, mockSortOrders, mockTimetables, mockZones } from '../server/src/mock.js';
+import { mockConfigs, mockEndpoints, mockExecutionTimes, mockItems, mockRestrictions, mockRoutes, mockSortOrders, mockTimetables, mockZones } from '../server/src/mock.js';
 import type { ZoneContext } from './logistics.js';
-import { computePromise, operationsHours, parseDurationHours, type PromiseInput } from './promise.js';
+import { computePromise, parseDurationHours, type PromiseInput } from './promise.js';
 import type { Destination, Item } from './types.js';
 
 const ctx: ZoneContext = { zones: new Map(mockZones.map((z) => [z.id, z])), endpoints: new Map(mockEndpoints.map((e) => [e.id, e])) };
@@ -30,6 +30,7 @@ function run(method: string, lines: [string, number][], destination: Destination
     restrictions: mockRestrictions,
     items,
     stock,
+    executionTimes: new Map(mockExecutionTimes.map((e) => [e.id, e])),
     ...extra,
   })[0];
 }
@@ -108,18 +109,29 @@ describe('with carrier timetables', () => {
     expect(used(o)).toEqual(['r_wh_fr_colissimo']);
     expect(o.eta_start).toBe(monday16 + 24 * 3600);
     expect(o.eta_end).toBe(monday16 + 74 * 3600);
-    expect(o.cutoff).toBe(monday16 + 3600);
+    // 30 min of validation + 1h of preparation, on the France timetable (Mon-Fri 9h-18h), before the 17:00 cutoff
+    expect(o.cutoff).toBe(monday16 + 3600 - 1.5 * 3600);
+    expect(o.analysis[0].operations?.map((op) => [op.operation, op.start - FRIDAY_18H])).toEqual([
+      ['validation', (2 * 24 + 15) * 3600], // Monday 09:00
+      ['pick_pack', (2 * 24 + 15.5) * 3600], // Monday 09:30
+    ]);
     expect(o.analysis[0].timeline?.[0].pickup?.name).toContain('Colissimo');
   });
 
   it('ranks the fastest schema on the real date, not only the transit time', () => {
     const o = run('SDD', [['SCARF_WOOL_RD', 1]], paris, { from: FRIDAY_18H, timetables });
-    // the store can be picked up on Friday evening by the courier (9h-20h every day)
     expect(used(o)).toEqual(['r_stores_idf_sdd']);
-    // ready 19:00 (1h of operations), courier pickup 19:00, 1h-3h of transit:
-    // earliest 20:00 inside the Friday 10h-21h slot, latest 22:00 -> end of the Saturday slot (21:00)
-    expect(o.eta_start).toBe(FRIDAY_18H + 2 * 3600);
-    expect(o.eta_end).toBe(FRIDAY_18H + 27 * 3600);
+    // preparation (1h) only on the France timetable: Monday 09:00-10:00, courier pickup 10:00, 1h-3h of transit,
+    // delivered in the Monday 10h-21h slot: 11:00 at the earliest, end of slot (21:00) at the latest
+    const monday = FRIDAY_18H + (2 * 24 + 6) * 3600; // Monday 00:00
+    expect(o.eta_start).toBe(monday + 11 * 3600);
+    expect(o.eta_end).toBe(monday + 21 * 3600);
+  });
+
+  it('times operations on the execution timetable, or else on the stock location opening hours', () => {
+    const noTimetable = run('SDD', [['SCARF_WOOL_RD', 1]], paris, { from: FRIDAY_18H, timetables, executionTimes: new Map() });
+    // unknown execution time id: duration 0, ready immediately
+    expect(noTimetable.analysis[0].operations?.[0].hours).toBe(0);
   });
 });
 
@@ -130,6 +142,5 @@ describe('durations', () => {
     expect(parseDurationHours('PT1H30M')).toBe(1.5);
     expect(parseDurationHours('00:45')).toBe(0.75);
     expect(parseDurationHours(90)).toBe(1.5);
-    expect(operationsHours(mockConfigs.find((c) => c.id === 'cfg_sdd')!)).toBe(1);
   });
 });

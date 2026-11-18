@@ -27,7 +27,18 @@ import {
   type StockLine,
   type ZoneContext,
 } from './logistics.js';
-import { timeLegs, type LegTiming, type ScheduledEvent, type Timetable } from './timetables.js';
+import {
+  operationsOf,
+  parseDurationHours,
+  runOperations,
+  timeLegs,
+  type ExecutionTime,
+  type LegTiming,
+  type OperationMoment,
+  type OperationTiming,
+  type ScheduledEvent,
+  type Timetable,
+} from './timetables.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Destination, Item, LineItem, PromiseOption, PromiseRoute, SortOrder } from './types.js';
 
 export interface PromiseInput {
@@ -50,6 +61,8 @@ export interface PromiseInput {
   /** Carrier timetables (GET /timetables) by id, and scheduled events (GET /scheduledevents). */
   timetables?: Map<string, Timetable>;
   events?: ScheduledEvent[];
+  /** Execution times of the operations (GET /execution_times) by id. */
+  executionTimes?: Map<string, ExecutionTime>;
 }
 
 export type ExclusionKind = 'restriction' | 'constraint' | 'no_stock' | 'timetable';
@@ -70,6 +83,10 @@ export interface SchemaAnalysis {
   cutoff?: number;
   /** Leg by leg timing (max transit track) with the pickup and delivery slots used. */
   timeline?: LegTiming[];
+  /** Operations timed for this schema (at start, preparation at the origin, receiving at the collection store). */
+  operations?: OperationTiming[];
+  /** Stock location used to time the preparation. */
+  timing_endpoint?: string;
   cost?: number;
 }
 
@@ -80,6 +97,8 @@ export interface LocalPromiseOption extends PromiseOption {
   operations_hours: number;
   /** Served by the stock of the collection store, without transport. */
   local_pickup?: boolean;
+  /** Operations timed for a local pickup (at start + from destination). */
+  local_operations?: OperationTiming[];
   /** The stock could not be read: availability not verified. */
   stock_unverified?: boolean;
 }
@@ -88,38 +107,12 @@ export interface LocalPromiseOption extends PromiseOption {
  * Helpers
  * ---------------------------------------------------------------------------------------------- */
 
-/** Parse an execution time: "2h", "30m", "1d", "PT2H30M", "02:30", or a number of minutes. */
-export function parseDurationHours(v: unknown): number {
-  if (typeof v === 'number') return v / 60;
-  if (typeof v !== 'string') return 0;
-  const s = v.trim().toUpperCase();
-  const iso = s.match(/^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/);
-  if (iso && s !== 'P') return Number(iso[1] ?? 0) * 24 + Number(iso[2] ?? 0) + Number(iso[3] ?? 0) / 60 + Number(iso[4] ?? 0) / 3600;
-  const hm = s.match(/^(\d+):(\d{2})$/);
-  if (hm) return Number(hm[1]) + Number(hm[2]) / 60;
-  let total = 0;
-  let matched = false;
-  for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*(D|H|M|MIN|S)\b/g)) {
-    matched = true;
-    const n = Number(m[1]);
-    total += m[2] === 'D' ? n * 24 : m[2] === 'H' ? n : m[2] === 'S' ? n / 3600 : n / 60;
-  }
-  if (matched) return total;
-  return /^\d+(\.\d+)?$/.test(s) ? Number(s) / 60 : 0;
-}
+export { parseDurationHours };
 
-/** Hours of the operations of a configuration (at start + shipment, or collection store ones for a local pickup). */
+/** Sum of the durations of the operations of a configuration (summary; the timing uses the calendars). */
 export function operationsHours(config: DeliveryConfig, localPickup = false): number {
-  const ops = (config.operations ?? {}) as Record<string, string[]>;
-  const times = (config.global_execution_times ?? {}) as Record<string, unknown>;
-  let hours = 0;
-  for (const [type, list] of Object.entries(ops)) {
-    const t = type.toLowerCase();
-    const fromStore = /collection|fulfil|fulfill/.test(t);
-    if (localPickup ? !(fromStore || /start/.test(t)) : fromStore && !/receiv/.test(t)) continue;
-    for (const op of list ?? []) hours += parseDurationHours(times[op]);
-  }
-  return hours;
+  const moments: OperationMoment[] = localPickup ? ['always_at_start', 'from_destination'] : ['always_at_start', 'before_shipping'];
+  return moments.flatMap((m) => operationsOf(config, m)).reduce((h, op) => h + parseDurationHours((config.global_execution_times as Record<string, unknown> | undefined)?.[op]), 0);
 }
 
 function attr(item: Item | undefined, ...names: string[]): unknown[] | undefined {
@@ -294,8 +287,11 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
 
   // 1-2. candidate schemas, sorted by priorities
   const schemas = buildSchemas(config, destination, input.routes, ctx, { maxLegs: 3, limit: 50 });
-  const timing = { timetables: input.timetables ?? new Map<string, Timetable>(), events: input.events ?? [] };
-  const readyAt = from + Math.round(opsHours * 3600);
+  const timing = { timetables: input.timetables ?? new Map<string, Timetable>(), events: input.events ?? [], executionTimes: input.executionTimes ?? new Map<string, ExecutionTime>() };
+  // Operations "always_at_start", executed at the order creation on their execution timetable.
+  const atStart = runOperations('always_at_start', config, undefined, from, timing);
+  const started = atStart?.end ?? from;
+  const destEndpoint = destination.endpoint_id ? ctx.endpoints.get(destination.endpoint_id) : undefined;
 
   // 3-4. exclusions and stock per schema
   const analysis: SchemaAnalysis[] = schemas.map((schema) => {
@@ -320,23 +316,43 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       if (!stockUnverified && !stockLines.find((s) => s.item_id === l.item_id)!.endpoints.length)
         exclusions.push({ kind: 'no_stock', item_id: l.item_id, text: '' });
     }
-    // 6. timing with the carrier timetables (pickup cutoff, transit days, delivery slots)
+    // 6. timing: preparation at the origin (before_shipping), carrier timetables (pickup cutoff, transit days,
+    //    delivery slots), receiving in the collection store (after_shipping).
     const routes = schema.legs.map((l) => l.route);
-    const fast = timeLegs(routes, readyAt, 'min', timing);
-    const slow = timeLegs(routes, readyAt, 'max', timing);
-    if (!fast || !slow)
+    const withStock = originEndpoints.filter((id) => stockUnverified || stockLines.every((sl) => sl.endpoints.some((e) => e.id === id)));
+    const candidates = (withStock.length ? withStock : originEndpoints).slice(0, 25);
+    let best: { endpoint?: string; prep: OperationTiming[]; fast: LegTiming[]; slow: LegTiming[]; endFast: number; endSlow: number; after: OperationTiming[] } | undefined;
+    for (const id of candidates.length ? candidates : [undefined]) {
+      const ep = id ? ctx.endpoints.get(id) : undefined;
+      const prep = runOperations('before_shipping', config, ep, started, timing);
+      if (!prep) continue;
+      const fast = timeLegs(routes, prep.end, 'min', timing);
+      const slow = timeLegs(routes, prep.end, 'max', timing);
+      if (!fast || !slow) continue;
+      const afterFast = runOperations('after_shipping', config, destEndpoint, fast[fast.length - 1].delivered, timing);
+      const afterSlow = runOperations('after_shipping', config, destEndpoint, slow[slow.length - 1].delivered, timing);
+      if (!afterFast || !afterSlow) continue;
+      if (!best || afterSlow.end < best.endSlow)
+        best = { endpoint: id, prep: prep.steps, fast, slow, endFast: afterFast.end, endSlow: afterSlow.end, after: afterSlow.steps };
+    }
+    if (!best || !atStart)
       for (const l of lines) exclusions.push({ kind: 'timetable', item_id: l.item_id, text: routes.map((r) => `${r.carrier.name} · ${r.carrier.option}`).join(' → ') });
-    const firstPickup = (fast ?? [])[0]?.pickup;
+    const firstPickup = best?.fast[0]?.pickup;
+    // Order before: carrier cutoff minus the working duration of the operations to perform before the pickup.
+    const opsBefore = [...(atStart?.steps ?? []), ...(best?.prep ?? [])].reduce((h, st) => h + st.hours, 0);
+    const cutoff = best && firstPickup ? firstPickup.end - Math.round(opsBefore * 3600) : undefined;
     return {
       schema,
       shipment: -1,
       shipments: [],
       stock: stockLines,
       exclusions,
-      eta_start: fast ? fast[fast.length - 1].delivered : from + Math.round((opsHours + schema.minHours) * 3600),
-      eta_end: slow ? slow[slow.length - 1].delivered : from + Math.round((opsHours + schema.maxHours) * 3600),
-      cutoff: firstPickup ? firstPickup.end - Math.round(opsHours * 3600) : undefined,
-      timeline: slow,
+      eta_start: best ? best.endFast : from + Math.round((opsHours + schema.minHours) * 3600),
+      eta_end: best ? best.endSlow : from + Math.round((opsHours + schema.maxHours) * 3600),
+      cutoff,
+      timeline: best?.slow,
+      operations: best ? [...(atStart?.steps ?? []), ...best.prep, ...best.after] : atStart?.steps,
+      timing_endpoint: best?.endpoint,
       cost: schemaCost(schema),
     };
   }).sort(byPriorities(order));
@@ -345,16 +361,19 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
 
   // Click & collect served by the stock of the collection store itself (no transport).
   if (isClickAndCollect(config) && destination.endpoint_id && !stockUnverified && lines.every((l) => stockOf(stock, destination.endpoint_id!, l.item_id) >= l.qty)) {
-    const h = operationsHours(config, true);
+    const local = runOperations('from_destination', config, destEndpoint, started, timing);
+    const end = local?.end ?? started;
+    const h = (end - from) / 3600;
     return {
       ...base,
       config,
       analysis,
       operations_hours: h,
       local_pickup: true,
+      local_operations: [...(atStart?.steps ?? []), ...(local?.steps ?? [])],
       status: 'valid',
-      eta_start: from + Math.round(h * 3600),
-      eta_end: from + Math.round(h * 3600),
+      eta_start: end,
+      eta_end: end,
       cost: 0,
       shipment_number: 1,
       delivery_routes: [],
@@ -365,8 +384,11 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   // 5. allocation: one shipment serving every line if possible, else split (best schema first) within the limit.
   type Shipment = { a: SchemaAnalysis; endpoint: string; lines: LineItem[] };
   const shipments: Shipment[] = [];
-  const endpointFor = (a: SchemaAnalysis, ls: LineItem[]) =>
-    a.stock.find((s) => s.item_id === ls[0].item_id)?.endpoints.find((e) => ls.every((l) => a.stock.find((s) => s.item_id === l.item_id)?.endpoints.some((x) => x.id === e.id)))?.id;
+  const endpointFor = (a: SchemaAnalysis, ls: LineItem[]) => {
+    const holds = (id: string) => ls.every((l) => a.stock.find((s) => s.item_id === l.item_id)?.endpoints.some((x) => x.id === id));
+    if (a.timing_endpoint && holds(a.timing_endpoint)) return a.timing_endpoint;
+    return a.stock.find((s) => s.item_id === ls[0].item_id)?.endpoints.find((e) => holds(e.id))?.id;
+  };
 
   const single = analysis.find((a) => lines.every((l) => canServe(a, l.item_id)) && endpointFor(a, lines));
   if (single) shipments.push({ a: single, endpoint: endpointFor(single, lines)!, lines: [...lines] });
@@ -429,7 +451,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     ...base,
     config,
     analysis,
-    operations_hours: opsHours,
+    operations_hours: shipments[0]?.a.timeline?.[0] ? (shipments[0].a.timeline[0].ready - from) / 3600 : opsHours,
     stock_unverified: stockUnverified,
     status: excluded.length ? 'partial' : 'valid',
     eta_start: Math.max(...shipments.map((s) => s.a.eta_start)),

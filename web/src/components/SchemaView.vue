@@ -6,6 +6,7 @@
 import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
 import { criterionKind, formatHours, prioritiesFor, type LogisticSchema } from '@shared/logistics';
 import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
+import type { OperationTiming } from '@shared/timetables';
 import { computed, ref } from 'vue';
 import { formatDate, formatMoney, t } from '../i18n';
 import { currency, destination, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
@@ -110,7 +111,23 @@ const rows = computed<Row[]>(() => {
 const sortedRows = computed(() => [...rows.value].sort((x, y) => Number(y.selected) - Number(x.selected) || x.number - y.number));
 
 /** Leg by leg timing with the carrier timetables. */
+function operationLine(op: OperationTiming): string {
+  return t('tlOperation')
+    .replace('{op}', op.operation)
+    .replace('{duration}', formatHours(op.hours, op.hours, units.value))
+    .replace('{calendar}', op.calendar ? ` · ${op.calendar}` : '')
+    .replace('{from}', formatDate(op.start))
+    .replace('{to}', formatDate(op.end));
+}
+
 function timelineLines(a: SchemaAnalysis): string[] {
+  const ops = a.operations ?? [];
+  const before = ops.filter((o) => o.moment !== 'after_shipping').map(operationLine);
+  const after = ops.filter((o) => o.moment === 'after_shipping').map(operationLine);
+  return [...before, ...legLines(a), ...after];
+}
+
+function legLines(a: SchemaAnalysis): string[] {
   return (a.timeline ?? []).map((tl, k) => {
     const leg = a.schema.legs[k]?.route;
     const carrier = leg ? `${leg.carrier.name} · ${leg.carrier.option}` : tl.route_id;
@@ -172,7 +189,11 @@ function chainLegs(a: SchemaAnalysis) {
         :title="t('excludedItems')"
         :subtitle="option.excluded_line_items.map((l) => `${itemLabel(l.item_id)} × ${l.qty}`).join(', ')"
       />
-      <OsAlert v-if="option.local_pickup" type="success" :subtitle="t('localPickup')" />
+      <OsAlert v-if="option.local_pickup" type="success" :subtitle="t('localPickup')">
+        <template #content>
+          <span v-for="(op, k) in option.local_operations ?? []" :key="k" class="os-body-s">{{ operationLine(op) }}</span>
+        </template>
+      </OsAlert>
       <OsAlert v-if="option.stock_unverified" type="warning" :subtitle="t('stockUnverified')" />
       <p class="os-body-s os-text-secondary method">
         {{ t('localComputation').replace('{ops}', formatHours(option.operations_hours, option.operations_hours, units)) }}
@@ -223,7 +244,7 @@ function chainLegs(a: SchemaAnalysis) {
             </span>
           </div>
           <SchemaChain :legs="chainLegs(row.a)" :destination="dest" compact />
-          <ul v-if="row.a.timeline?.length" class="timeline os-body-s">
+          <ul v-if="row.a.timeline?.length || row.a.operations?.length" class="timeline os-body-s">
             <li v-for="(line, k) in timelineLines(row.a)" :key="k"><OsIcon icon="time" size="xs" /> <span>{{ line }}</span></li>
           </ul>
           <ul v-if="row.reasons.length" class="reasons">

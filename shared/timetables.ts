@@ -8,7 +8,7 @@
  *  - carrier_transit_timetable  : periods during which trucks run. Transit hours only elapse during these periods.
  *  - carrier_delivery_timetable : delivery slots. A parcel is delivered in the next open slot after its arrival.
  */
-import type { DeliveryRoute } from './types.js';
+import type { DeliveryConfig, DeliveryRoute, Endpoint } from './types.js';
 
 export interface Timespan {
   start: number;
@@ -257,4 +257,125 @@ export function timeLegs(routes: DeliveryRoute[], ready: number, transit: 'min' 
     t = delivered;
   }
   return result;
+}
+
+/* ------------------------------------------------------------------------------------------------
+ * Operations (execution times)
+ * ---------------------------------------------------------------------------------------------- */
+
+/** GET /execution_times: duration of an operation and the timetable during which it can be executed. */
+export interface ExecutionTime {
+  id: string;
+  name?: string;
+  operation?: string;
+  /** "12h", "24m"... */
+  duration?: string;
+  execution_moment?: string;
+  /** execution_time_timetable */
+  timetable_id?: string;
+}
+
+export type OperationMoment = 'always_at_start' | 'before_shipping' | 'after_shipping' | 'from_destination';
+
+export interface OperationTiming {
+  operation: string;
+  moment: OperationMoment;
+  execution_time?: string;
+  hours: number;
+  /** Name of the calendar used (execution timetable or opening hours of the stock location). */
+  calendar?: string;
+  start: number;
+  end: number;
+}
+
+export interface OperationsContext extends TimingContext {
+  executionTimes: Map<string, ExecutionTime>;
+}
+
+/** Parse a duration: "2h", "30m", "1d", "PT2H30M", "02:30", or a number of minutes. */
+export function parseDurationHours(v: unknown): number {
+  if (typeof v === 'number') return v / 60;
+  if (typeof v !== 'string') return 0;
+  const s = v.trim().toUpperCase();
+  const iso = s.match(/^P(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/);
+  if (iso && s !== 'P') return Number(iso[1] ?? 0) * 24 + Number(iso[2] ?? 0) + Number(iso[3] ?? 0) / 60 + Number(iso[4] ?? 0) / 3600;
+  const hm = s.match(/^(\d+):(\d{2})$/);
+  if (hm) return Number(hm[1]) + Number(hm[2]) / 60;
+  // only a value made entirely of durations ("1d 2h", "30m"), not an identifier containing "1h"
+  if (!/^(\d+(?:\.\d+)?\s*(D|H|MIN|M|S)\s*)+$/.test(s)) return /^\d+(\.\d+)?$/.test(s) ? Number(s) / 60 : 0;
+  let total = 0;
+  let matched = false;
+  for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*(D|H|MIN|M|S)/g)) {
+    matched = true;
+    const n = Number(m[1]);
+    total += m[2] === 'D' ? n * 24 : m[2] === 'H' ? n : m[2] === 'S' ? n / 3600 : n / 60;
+  }
+  if (matched) return total;
+  return /^\d+(\.\d+)?$/.test(s) ? Number(s) / 60 : 0;
+}
+
+/** Moment of a key of `delivery_config.operations` (official moments, or older labels). */
+export function momentOf(key: string): OperationMoment | undefined {
+  const k = key.toLowerCase();
+  if (k === 'always_at_start' || /start/.test(k)) return 'always_at_start';
+  if (k === 'before_shipping' || (/ship/.test(k) && !/after/.test(k))) return 'before_shipping';
+  if (k === 'after_shipping' || /after|receiv/.test(k)) return 'after_shipping';
+  if (k === 'from_destination' || /destination|collection|fulfil/.test(k)) return 'from_destination';
+  return undefined;
+}
+
+/** Operations of a moment, in the configuration order. */
+export function operationsOf(config: DeliveryConfig, moment: OperationMoment): string[] {
+  return Object.entries((config.operations ?? {}) as Record<string, string[]>)
+    .filter(([k]) => momentOf(k) === moment)
+    .flatMap(([, ops]) => ops ?? []);
+}
+
+/**
+ * Execution time of an operation: the one of the stock location (endpoint.execution_times), else the one of the
+ * configuration (global_execution_times: operation -> execution time id). A value that is not a known id but a
+ * duration ("2h") is accepted as is.
+ */
+export function executionTimeFor(op: string, config: DeliveryConfig, endpoint: Endpoint | undefined, ctx: OperationsContext): { id?: string; et?: ExecutionTime; hours: number } {
+  const ref = endpoint?.execution_times?.find((e) => e.operation === op)?.id ?? (config.global_execution_times as Record<string, string> | undefined)?.[op];
+  const et = ref ? ctx.executionTimes.get(ref) : undefined;
+  if (et) return { id: et.id, et, hours: parseDurationHours(et.duration) };
+  return { id: ref, hours: parseDurationHours(ref) };
+}
+
+function endpointClosures(endpoint: Endpoint | undefined, events: ScheduledEvent[]): Interval[] {
+  if (!endpoint) return [];
+  return events
+    .filter((e) => e.options?.open === false && (e.timetable_types ?? []).includes('endpoint_timetable') && (e.links?.endpoint_ids ?? []).includes(endpoint.id))
+    .map((e) => ({ start: e.start, end: e.end }));
+}
+
+/**
+ * Run the operations of a moment from `start`. Each duration only elapses during the open periods of the execution
+ * time timetable (execution_time_timetable), else of the opening hours of the stock location, else continuously.
+ * Returns undefined when a calendar has no open period over the horizon.
+ */
+export function runOperations(
+  moment: OperationMoment,
+  config: DeliveryConfig,
+  endpoint: Endpoint | undefined,
+  start: number,
+  ctx: OperationsContext,
+): { end: number; steps: OperationTiming[] } | undefined {
+  let t = start;
+  const steps: OperationTiming[] = [];
+  for (const op of operationsOf(config, moment)) {
+    const { id, et, hours } = executionTimeFor(op, config, endpoint, ctx);
+    const tt = et?.timetable_id ? ctx.timetables.get(et.timetable_id) : undefined;
+    const opening = !tt && endpoint?.opening_hours?.timespans?.length
+      ? ({ id: `${endpoint.id}:opening`, name: endpoint.name ?? endpoint.id, hours: { timezone: endpoint.opening_hours.timezone ?? endpoint.timezone, timespans: endpoint.opening_hours.timespans } } as Timetable)
+      : undefined;
+    const cal = new Calendar(tt ?? opening, endpointClosures(endpoint, ctx.events));
+    const begin = hours > 0 && cal.constrained ? cal.next(t)?.start : t;
+    const end = cal.advance(t, hours);
+    if (end === undefined || begin === undefined) return undefined;
+    steps.push({ operation: op, moment, execution_time: et?.name ?? id, hours, calendar: (tt ?? opening)?.name, start: begin, end });
+    t = end;
+  }
+  return { end: t, steps };
 }

@@ -68,6 +68,10 @@ export interface Endpoint {
     };
   };
   timezone?: string;
+  /** Opening hours (weekly timespans), used for operations without their own timetable. */
+  opening_hours?: { timezone?: string; timespans?: { start: number; end: number; options?: { open?: boolean } }[] };
+  /** Execution times specific to this stock location: operation -> execution time id. */
+  execution_times?: { id: string; operation?: string }[];
 }
 
 export interface Location {

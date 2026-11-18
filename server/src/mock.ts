@@ -101,6 +101,11 @@ export const mockTimetables = [
   tt('tt_stuart_pickup', 'Stuart enlèvement 9h-20h', 'carrier_pickup_timetable', weekdays(9, 20, [0, 1, 2, 3, 4, 5, 6])),
   tt('tt_stuart_delivery', 'Stuart créneaux 10h-21h', 'carrier_delivery_timetable', weekdays(10, 21, [0, 1, 2, 3, 4, 5, 6])),
   tt('tt_shuttle_pickup', 'Navette enlèvement 7h-8h', 'carrier_pickup_timetable', weekdays(7, 8)),
+  tt('tt_ops_france', 'France', 'execution_time_timetable', weekdays(9, 18)),
+];
+export const mockExecutionTimes = [
+  { id: 'et_pick_pack_1h', name: 'Préparation 1h', operation: 'pick_pack', duration: '1h', execution_moment: 'before_shipping', timetable_id: 'tt_ops_france' },
+  { id: 'et_validation_30m', name: 'Validation 30 min', operation: 'validation', duration: '30m', execution_moment: 'always_at_start', timetable_id: 'tt_ops_france' },
 ];
 export const mockScheduledEvents = [
   {
@@ -128,6 +133,8 @@ export const mockConfigs: DeliveryConfig[] = [
     ],
     delivery_zone_ids: ['z_fr', 'z_corse', 'z_eu'],
     authorized_shipment_number: 2,
+    operations: { always_at_start: ['validation'], before_shipping: ['pick_pack'] },
+    global_execution_times: { validation: 'et_validation_30m', pick_pack: 'et_pick_pack_1h' },
   },
   {
     id: 'cfg_sdd',
@@ -138,8 +145,8 @@ export const mockConfigs: DeliveryConfig[] = [
     delivery_zone_ids: ['z_idf'],
     authorized_shipment_number: 1,
     sort_order: { sort_criterias: [{ field: 'eta_end', desc: false }] },
-    operations: { shipment: ['picking'] },
-    global_execution_times: { picking: '1h' },
+    operations: { before_shipping: ['pick_pack'] },
+    global_execution_times: { pick_pack: 'et_pick_pack_1h' },
   },
   {
     id: 'cfg_ckc',
@@ -386,6 +393,8 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
       const type = (body.filters as { type?: string } | undefined)?.type;
       return { timetables: mockTimetables.filter((x) => !type || x.type === type) };
     }
+    case '/execution_times':
+      return { execution_times: mockExecutionTimes };
     case '/scheduledevents':
       return { scheduled_events: mockScheduledEvents };
     case '/sort_orders':

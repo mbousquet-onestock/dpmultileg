@@ -1,4 +1,4 @@
-import type { ScheduledEvent, Timetable } from '@shared/timetables';
+import type { ExecutionTime, ScheduledEvent, Timetable } from '@shared/timetables';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, PromiseOption, SalesChannel, SortOrder, Zone } from '@shared/types';
 
 export interface Referential {
@@ -11,6 +11,7 @@ export interface Referential {
   delivery_restrictions?: DeliveryRestriction[];
   timetables?: Timetable[];
   scheduled_events?: ScheduledEvent[];
+  execution_times?: ExecutionTime[];
 }
 
 export interface SessionInfo {
