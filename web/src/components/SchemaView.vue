@@ -18,6 +18,7 @@ const dest = computed(() => option.value?.destination ?? destination.value ?? {}
 const units = computed(() => ({ hour: t('hour'), day: t('day') }));
 const zoneName = (id: string) => zoneCtx.value.zones.get(id)?.name ?? id;
 const endpointName = (id: string) => endpoints.value.find((e) => e.id === id)?.name ?? id;
+const itemImage = (id: string) => state.lines.find((l) => l.item.id === id)?.item.image || undefined;
 const transit = (s: LogisticSchema) => formatHours(s.minHours, s.maxHours, units.value);
 const configOpen = ref(false);
 
@@ -267,6 +268,17 @@ function chainLegs(a: SchemaAnalysis) {
             </span>
           </div>
           <SchemaChain :legs="chainLegs(row.a)" :destination="dest" compact />
+          <div v-for="sh in row.a.shipments" :key="sh.index" class="carried">
+            <span class="os-body-m os-text-secondary carried-label">
+              {{ (option.shipment_number ?? 1) > 1 ? `${t('shipment')} ${sh.index + 1} · ` : '' }}{{ t('carriedItems') }}
+            </span>
+            <span v-for="l in sh.lines" :key="l.item_id" class="carried-item">
+              <img v-if="itemImage(l.item_id)" :src="itemImage(l.item_id)" alt="" />
+              <span class="os-label-s">{{ itemLabel(l.item_id) }}</span>
+              <span class="os-body-m qty">× {{ l.qty }}</span>
+            </span>
+            <span class="os-body-s os-text-secondary">{{ t('carriedFrom').replace('{where}', endpointName(sh.endpoint)) }}</span>
+          </div>
           <ul v-if="display.timeline && (row.a.timeline?.length || row.a.operations?.length)" class="timeline os-body-s">
             <li v-for="(line, k) in timelineLines(row.a)" :key="k"><OsIcon icon="time" size="xs" /> <span>{{ line }}</span></li>
           </ul>
@@ -307,6 +319,11 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .theo.used { border: 1px solid var(--os-green-1000); background: var(--os-green-t-100); --chain-bg: #ecf5ec; }
 .theo-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 .badges { display: inline-flex; gap: 6px; }
+.carried { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--os-border); }
+.carried-label { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
+.carried-item { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 2px; border-radius: 5px; background: #fff; border: 1px solid var(--os-border); color: var(--os-text-primary); }
+.carried-item img { width: 24px; height: 24px; object-fit: contain; border-radius: 3px; }
+.carried-item .qty { color: var(--os-primary-1000); }
 .reasons { list-style: none; margin: 6px 0 0; padding: 8px 0 0; border-top: 1px solid var(--os-border); display: flex; flex-direction: column; gap: 4px; }
 .reasons li { display: flex; align-items: flex-start; gap: 6px; color: var(--os-text-primary); }
 .reasons li :deep(.os-icon) { margin-top: 1px; }
