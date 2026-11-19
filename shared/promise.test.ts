@@ -191,6 +191,18 @@ describe('consolidation', () => {
     expect(o.consolidation!.analysis.schema.legs.at(-1)!.route.carrier.name).toBe('stuart');
   });
 
+  it('only uses routes of the delivery method (every leg, transfers included)', () => {
+    const config = mockConfigs.find((c) => c.id === 'cfg_hd_std')!;
+    const allowed = (name: string, option: string) => config.carriers!.some((c) => c.name === name && c.option === option);
+    const o = run('HD_standard', both, paris, { consolidate: true });
+    for (const a of o.analysis) for (const l of a.schema.legs) expect(allowed(l.route.carrier.name, l.route.carrier.option)).toBe(true);
+    for (const tr of o.consolidation!.transfers) for (const l of tr.schema.legs) expect(allowed(l.route.carrier.name, l.route.carrier.option)).toBe(true);
+    // without the shuttles in the method, the transfer can not use them (it uses another carrier of the method)
+    const restricted = mockConfigs.map((c) => (c.id === 'cfg_hd_std' ? { ...c, carriers: c.carriers!.filter((x) => x.name !== 'store_shuttle') } : c));
+    const other = run('HD_standard', both, paris, { consolidate: true, configs: restricted });
+    for (const tr of other.consolidation?.transfers ?? []) for (const l of tr.schema.legs) expect(l.route.carrier.name).not.toBe('store_shuttle');
+  });
+
   it('keeps the normal allocation when one shipment is already enough', () => {
     const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { consolidate: true });
     expect(o.consolidation).toBeUndefined();

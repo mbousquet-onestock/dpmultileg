@@ -651,14 +651,15 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
 
   /**
    * Consolidation point: a stock location of the origin zone of a final schema of the method (respecting its carriers,
-   * restrictions and cost tables), able to receive the missing items through transfer routes (any carrier), then to
+   * restrictions and cost tables), able to receive the missing items through transfer routes of the same delivery
+ * method (carriers / options of its configuration), then to
    * ship everything in one parcel. The best candidate according to the priorities of the method is returned.
    */
   function consolidate(): Consolidation | undefined {
     const transferChains = new Map<string, LogisticSchema[]>();
     const chainsTo = (endpoint: string) => {
       if (!transferChains.has(endpoint))
-        transferChains.set(endpoint, buildSchemas(undefined, { endpoint_id: endpoint }, input.routes, ctx, { maxLegs: 2, limit: 30 }));
+        transferChains.set(endpoint, buildSchemas({ ...config!, delivery_zone_ids: undefined }, { endpoint_id: endpoint }, input.routes, ctx, { maxLegs: 2, limit: 30 }));
       return transferChains.get(endpoint)!;
     };
     const candidates: Consolidation[] = [];

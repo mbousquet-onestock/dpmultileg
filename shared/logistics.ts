@@ -198,8 +198,8 @@ export interface SchemaOptions {
  *
  * - the last leg must arrive in a zone containing the destination and, when the configuration lists
  *   delivery zones, the destination must belong to one of them;
- * - when the configuration lists carriers, the last leg must use one of them (upstream legs, e.g.
- *   warehouse -> store replenishment, may use any carrier: they are flagged with configCarrier=false);
+ * - when the configuration lists carriers, every leg must use one of them (e.g. Standard: GLS standard to the
+ *   stores, then Store Delivery standard to the customer);
  * - legs are chained backward: the arrival zone of a leg must connect with the departure zone of the next one.
  */
 export function buildSchemas(
@@ -234,7 +234,9 @@ export function buildSchemas(
       if (!zonesConnect(r.destination_zone_id, first.origin_zone_id, ctx)) continue;
       // Avoid loops (going back to a zone already crossed).
       if (r.origin_zone_id && usedZones.has(r.origin_zone_id)) continue;
-      queue.push([{ route: r, configCarrier: isConfigCarrier(r) }, ...chain]);
+      // Every leg uses a carrier of the delivery method (its configuration lists all the carriers / options allowed).
+      if (!isConfigCarrier(r)) continue;
+      queue.push([{ route: r, configCarrier: true }, ...chain]);
     }
   }
   return results.sort((a, b) => a.legs.length - b.legs.length || a.maxHours - b.maxHours).slice(0, limit);
