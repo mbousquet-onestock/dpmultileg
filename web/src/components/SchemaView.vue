@@ -157,8 +157,16 @@ function timelineLines(a: SchemaAnalysis): string[] {
   return [...before, ...legLines(a), ...after];
 }
 
+/** The schema used by the consolidation: dates and timeline after the transfers. */
+const isConsolidated = (a: SchemaAnalysis) => option.value?.consolidation?.analysis === a;
+function rowEta(a: SchemaAnalysis): [number, number] {
+  const c = option.value?.consolidation;
+  return c && isConsolidated(a) ? [c.eta_start, c.eta_end] : [a.eta_start, a.eta_end];
+}
+
 function legLines(a: SchemaAnalysis): string[] {
-  return (a.timeline ?? []).map((tl, k) => {
+  const timeline = isConsolidated(a) ? option.value!.consolidation!.timeline : a.timeline;
+  return (timeline ?? []).map((tl, k) => {
     const leg = a.schema.legs[k]?.route;
     const carrier = leg ? `${leg.carrier.name} · ${leg.carrier.option}` : tl.route_id;
     const parts: string[] = [];
@@ -223,6 +231,32 @@ function chainLegs(a: SchemaAnalysis) {
         :title="t('excludedItems')"
         :subtitle="option.excluded_line_items.map((l) => `${itemLabel(l.item_id)} × ${l.qty}`).join(', ')"
       />
+      <div v-if="option.consolidation" class="consolidation">
+        <div class="cons-head">
+          <OsIcon icon="merge" color="brand" />
+          <span class="os-label-l">{{ t('consolidationAt').replace('{point}', endpointName(option.consolidation.point)) }}</span>
+          <span class="os-body-s os-text-secondary">{{ t('consolidationReady').replace('{at}', formatDate(option.consolidation.ready)) }}</span>
+        </div>
+        <ul class="cons-list os-body-s">
+          <li v-if="option.consolidation.local.length">
+            <OsIcon icon="store" size="xs" />
+            <span>{{ t('consolidationLocal').replace('{items}', option.consolidation.local.map((l) => `${itemLabel(l.item_id)} × ${l.qty}`).join(', ')) }}</span>
+          </li>
+          <li v-for="(tr, k) in option.consolidation.transfers" :key="k">
+            <OsIcon icon="truck" size="xs" />
+            <span>
+              {{
+                t('consolidationTransfer')
+                  .replace('{item}', `${itemLabel(tr.item_id)} × ${tr.qty}`)
+                  .replace('{from}', endpointName(tr.from))
+                  .replace('{carriers}', tr.schema.legs.map((l) => `${l.route.carrier.name} · ${l.route.carrier.option}`).join(' → '))
+                  .replace('{at}', formatDate(tr.arrival))
+              }}
+            </span>
+          </li>
+        </ul>
+      </div>
+      <OsAlert v-if="option.consolidation_failed" type="info" :subtitle="t('consolidationFailed')" />
       <OsAlert v-if="option.local_pickup" type="success" :subtitle="t('localPickup')">
         <template #content>
           <span v-for="(op, k) in option.local_operations ?? []" :key="k" class="os-body-s">{{ operationLine(op) }}</span>
@@ -265,7 +299,7 @@ function chainLegs(a: SchemaAnalysis) {
           <div class="theo-head os-body-s os-text-secondary">
             <span>
               #{{ row.number }} · {{ row.a.schema.legs.length }} {{ row.a.schema.legs.length > 1 ? t('legs') : t('leg') }} · {{ t('transit') }}
-              {{ transit(row.a.schema) }} · {{ t('eta') }} {{ formatRange(row.a.eta_start, row.a.eta_end) }}
+              {{ transit(row.a.schema) }} · {{ t('eta') }} {{ formatRange(...rowEta(row.a)) }}
             </span>
             <span class="badges">
               <OsBadge
@@ -318,6 +352,12 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .kpi { display: flex; flex-direction: column; gap: 2px; }
 .kpi .os-label-l { color: var(--os-text-primary); }
 .method { margin: 0; }
+.consolidation { border: 1px solid var(--os-primary-800); background: var(--os-primary-100); border-radius: 5px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.cons-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cons-head .os-label-l { color: var(--os-text-primary); }
+.cons-list { list-style: none; margin: 0; padding: 0 0 0 32px; display: flex; flex-direction: column; gap: 4px; color: var(--os-text-primary); }
+.cons-list li { display: flex; gap: 6px; align-items: flex-start; }
+.cons-list li :deep(.os-icon) { margin-top: 1px; color: var(--os-neutral-500); }
 .block { display: flex; flex-direction: column; gap: 10px; }
 .section-head { display: flex; flex-direction: column; gap: 2px; }
 .section-head .os-label-l { color: var(--os-text-primary); }

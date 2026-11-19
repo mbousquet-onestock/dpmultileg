@@ -162,6 +162,42 @@ describe('shipping fees', () => {
   });
 });
 
+describe('consolidation', () => {
+  const both: [string, number][] = [
+    ['WATCH_STEEL_SV', 1],
+    ['PARKA_WINTER_KK_M', 1],
+  ];
+  it('groups the items at an intermediate point after a transfer: one shipment', () => {
+    const normal = run('HD_standard', both);
+    expect(normal.shipment_number).toBe(2);
+    const o = run('HD_standard', both, paris, { consolidate: true });
+    expect(o.status).toBe('valid');
+    expect(o.shipment_number).toBe(1);
+    const c = o.consolidation!;
+    // the point holds the watch, the parka is transferred to it
+    expect(['ST_PARIS', 'ST_LYON']).toContain(c.point);
+    expect(c.local.map((l) => l.item_id)).toEqual(['WATCH_STEEL_SV']);
+    expect(c.transfers.map((tr) => tr.item_id)).toEqual(['PARKA_WINTER_KK_M']);
+    // the final shipment leaves once the transfer has arrived
+    expect(c.ready).toBeGreaterThanOrEqual(c.transfers[0].arrival);
+    expect(o.delivery_routes!.filter((r) => r.transfer).length).toBeGreaterThan(0);
+  });
+
+  it('respects the delivery method: same day delivery (1 shipment allowed) becomes complete', () => {
+    expect(run('SDD', both).status).toBe('partial');
+    const o = run('SDD', both, paris, { consolidate: true });
+    expect(o).toMatchObject({ status: 'valid', shipment_number: 1 });
+    // last leg with a carrier of the method
+    expect(o.consolidation!.analysis.schema.legs.at(-1)!.route.carrier.name).toBe('stuart');
+  });
+
+  it('keeps the normal allocation when one shipment is already enough', () => {
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { consolidate: true });
+    expect(o.consolidation).toBeUndefined();
+    expect(o.shipment_number).toBe(1);
+  });
+});
+
 describe('identical schemas', () => {
   it('shows once the schemas with the same carriers and zones (the orchestrator picks the location)', () => {
     const twin = { ...mockRoutes.find((r) => r.id === 'r_wh_fr_colissimo')!, id: 'r_wh_fr_colissimo_bis', metric_values: { cost_by_parcel: 9 } };

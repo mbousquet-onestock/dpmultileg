@@ -66,6 +66,8 @@ export interface PromiseInput {
   executionTimes?: Map<string, ExecutionTime>;
   /** Extension settings (priorities per delivery method). */
   settings?: Record<string, unknown>;
+  /** Deliver in a minimum of parcels: group the items at an intermediate point after transfers. */
+  consolidate?: boolean;
 }
 
 export type ExclusionKind = 'restriction' | 'constraint' | 'no_stock' | 'timetable';
@@ -111,6 +113,40 @@ export interface LocalPromiseOption extends PromiseOption {
   local_operations?: OperationTiming[];
   /** The stock could not be read: availability not verified. */
   stock_unverified?: boolean;
+  /** Consolidation (option "consolidation"): items grouped at an intermediate point, then one shipment. */
+  consolidation?: Consolidation;
+  /** Consolidation requested but no consolidation point found: the normal allocation is kept. */
+  consolidation_failed?: boolean;
+}
+
+/** Transfer of an item to the consolidation point. */
+export interface ConsolidationTransfer {
+  item_id: string;
+  qty: number;
+  /** Stock location the item is transferred from. */
+  from: string;
+  schema: LogisticSchema;
+  timeline?: LegTiming[];
+  /** Arrival at the consolidation point. */
+  arrival: number;
+  cost?: number;
+}
+
+export interface Consolidation {
+  /** Stock location where the items are grouped. */
+  point: string;
+  /** Final schema (from the consolidation point to the customer). */
+  analysis: SchemaAnalysis;
+  /** Lines available at the consolidation point. */
+  local: LineItem[];
+  transfers: ConsolidationTransfer[];
+  /** All the items are at the consolidation point and prepared. */
+  ready: number;
+  timeline?: LegTiming[];
+  eta_start: number;
+  eta_end: number;
+  cost: number;
+  shipping_fees?: number;
 }
 
 /* ------------------------------------------------------------------------------------------------
@@ -558,6 +594,162 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     s.a.shipments.push({ index: i, endpoint: s.endpoint, lines: s.lines });
   });
 
+  // 8. consolidation: one shipment from an intermediate point after transfers of the missing items
+  let consolidationFailed = false;
+  if (input.consolidate && (shipments.length > 1 || excluded.length > 0)) {
+    const c = consolidate();
+    if (c) {
+      for (const a of analysis) {
+        a.shipment = -1;
+        a.shipments = [];
+      }
+      c.analysis.shipment = 0;
+      c.analysis.shipments = [{ index: 0, endpoint: c.point, lines: [...lines] }];
+      const finalRoutes: PromiseRoute[] = c.analysis.schema.legs.map((leg, idx) => ({
+        id: leg.route.id,
+        carrier: leg.route.carrier,
+        origin_zone_id: leg.route.origin_zone_id,
+        destination_zone_id: leg.route.destination_zone_id,
+        origin_endpoint_id: idx === 0 ? c.point : undefined,
+        items: lines.map((l) => ({ id: l.item_id, quantity: l.qty })),
+        eta_start: c.timeline?.[idx]?.slot?.start ?? c.timeline?.[idx]?.arrival,
+        eta_end: c.timeline?.[idx]?.delivered,
+        metric_values: leg.route.metric_values,
+      }));
+      const transferRoutes: PromiseRoute[] = c.transfers.flatMap((tr) =>
+        tr.schema.legs.map((leg, idx) => ({
+          id: leg.route.id,
+          carrier: leg.route.carrier,
+          origin_zone_id: leg.route.origin_zone_id,
+          destination_zone_id: leg.route.destination_zone_id,
+          origin_endpoint_id: idx === 0 ? tr.from : undefined,
+          items: [{ id: tr.item_id, quantity: tr.qty }],
+          eta_end: tr.timeline?.[idx]?.delivered,
+          metric_values: leg.route.metric_values,
+          transfer: true,
+        })),
+      );
+      return {
+        ...base,
+        config,
+        analysis,
+        operations_hours: (c.ready - from) / 3600,
+        stock_unverified: stockUnverified,
+        status: 'valid',
+        eta_start: c.eta_start,
+        eta_end: c.eta_end,
+        cutoff: c.analysis.cutoff,
+        cost: Math.round(c.cost * 100) / 100,
+        shipping_fees: c.shipping_fees === undefined ? undefined : Math.round(c.shipping_fees * 100) / 100,
+        shipment_number: 1,
+        delivery_routes: [...transferRoutes, ...finalRoutes],
+        consolidation: c,
+      };
+    }
+    consolidationFailed = true;
+  }
+
+  /**
+   * Consolidation point: a stock location of the origin zone of a final schema of the method (respecting its carriers,
+   * restrictions and cost tables), able to receive the missing items through transfer routes (any carrier), then to
+   * ship everything in one parcel. The best candidate according to the priorities of the method is returned.
+   */
+  function consolidate(): Consolidation | undefined {
+    const transferChains = new Map<string, LogisticSchema[]>();
+    const chainsTo = (endpoint: string) => {
+      if (!transferChains.has(endpoint))
+        transferChains.set(endpoint, buildSchemas(undefined, { endpoint_id: endpoint }, input.routes, ctx, { maxLegs: 2, limit: 30 }));
+      return transferChains.get(endpoint)!;
+    };
+    const candidates: Consolidation[] = [];
+    for (const a of analysis) {
+      // final schema: every line allowed (restrictions, cost tables); missing stock is solved by the transfers
+      if (a.exclusions.some((e) => e.kind !== 'no_stock')) continue;
+      const finalCosts = a.schema.legs.map((leg) => selectVariant(leg.route, lines, items, orderPrice));
+      if (finalCosts.some((v) => !v.variant)) continue; // the grouped parcel must match a cost table row
+      for (const point of zoneEndpoints(ctx.zones.get(a.schema.originZoneId ?? ''), ctx).slice(0, 25)) {
+        const pointEp = ctx.endpoints.get(point.id);
+        const local: LineItem[] = [];
+        const transfers: ConsolidationTransfer[] = [];
+        let ok = true;
+        for (const l of lines) {
+          if (!stockUnverified && stockOf(stock, point.id, l.item_id) >= l.qty) {
+            local.push(l);
+            continue;
+          }
+          if (stockUnverified) {
+            local.push(l);
+            continue;
+          }
+          let best: ConsolidationTransfer | undefined;
+          for (const chain of chainsTo(point.id)) {
+            const chainRoutes = chain.legs.map((x) => x.route);
+            if (chainRoutes.some((r) => !selectVariant(r, [l], items, orderPrice).variant)) continue;
+            for (const from of zoneEndpoints(ctx.zones.get(chain.originZoneId ?? ''), ctx).slice(0, 25)) {
+              if (from.id === point.id || stockOf(stock, from.id, l.item_id) < l.qty) continue;
+              const prep = runOperations('before_shipping', config!, ctx.endpoints.get(from.id), started, timing);
+              if (!prep) continue;
+              const legs = timeLegs(chainRoutes, prep.end, 'max', timing);
+              if (!legs) continue;
+              const arrival = legs[legs.length - 1].delivered;
+              if (!best || arrival < best.arrival) {
+                const cost = chainRoutes.reduce((sum, r) => {
+                  const mv = selectVariant(r, [l], items, orderPrice).variant?.metric_values ?? r.metric_values ?? {};
+                  return sum + (mv.cost_by_parcel ?? mv.cost ?? 0);
+                }, 0);
+                best = { item_id: l.item_id, qty: l.qty, from: from.id, schema: chain, timeline: legs, arrival, cost };
+              }
+            }
+          }
+          if (!best) {
+            ok = false;
+            break;
+          }
+          transfers.push(best);
+        }
+        if (!ok) continue;
+        const prepLocal = runOperations('before_shipping', config!, pointEp, started, timing);
+        if (!prepLocal) continue;
+        const ready = Math.max(prepLocal.end, ...transfers.map((tr) => tr.arrival));
+        const routes = a.schema.legs.map((x) => x.route);
+        const fast = timeLegs(routes, ready, 'min', timing);
+        const slow = timeLegs(routes, ready, 'max', timing);
+        if (!fast || !slow) continue;
+        const afterFast = runOperations('after_shipping', config!, destEndpoint, fast[fast.length - 1].delivered, timing);
+        const afterSlow = runOperations('after_shipping', config!, destEndpoint, slow[slow.length - 1].delivered, timing);
+        if (!afterFast || !afterSlow) continue;
+        const mvs = finalCosts.map((v, i) => v.variant?.metric_values ?? a.schema.legs[i].route.metric_values ?? {});
+        const finalCost = mvs.reduce((sum, mv) => sum + (mv.cost_by_parcel ?? mv.cost ?? 0), 0);
+        const fees = mvs.some((mv) => mv.shipping_fees !== undefined) ? mvs.reduce((sum, mv) => sum + (mv.shipping_fees ?? 0), 0) : undefined;
+        candidates.push({
+          point: point.id,
+          analysis: a,
+          local,
+          transfers,
+          ready,
+          timeline: slow,
+          eta_start: afterFast.end,
+          eta_end: afterSlow.end,
+          cost: finalCost + transfers.reduce((sum, tr) => sum + (tr.cost ?? 0), 0),
+          shipping_fees: fees,
+        });
+      }
+    }
+    // best candidate according to the priorities of the method (time: eta_end, cost: total cost)
+    const value = (c: Consolidation, field: string) =>
+      criterionKind(field) === 'time' ? (/start/i.test(field) ? c.eta_start : c.eta_end) : /cost|price|fee/i.test(field) ? c.cost : analysisValue(c.analysis, field);
+    candidates.sort((x, y) => {
+      for (const cr of order.sort_criterias ?? []) {
+        const vx = value(x, cr.field);
+        const vy = value(y, cr.field);
+        if (vx === undefined || vy === undefined || vx === vy) continue;
+        return cr.desc ? vy - vx : vx - vy;
+      }
+      return x.transfers.length - y.transfers.length || x.eta_end - y.eta_end;
+    });
+    return candidates[0];
+  }
+
   // 7. routes, dates, cost
   const deliveryRoutes: PromiseRoute[] = shipments.flatMap((s) =>
     s.a.schema.legs.map((leg, idx) => {
@@ -597,6 +789,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     line_items: excluded.length ? served : undefined,
     excluded_line_items: excluded.length ? excluded : undefined,
     delivery_routes: deliveryRoutes,
+    consolidation_failed: consolidationFailed || undefined,
   };
 }
 

@@ -124,6 +124,17 @@ function toggleDate(on: boolean) {
       <OsSelectMultiple v-model="state.methods.values" class="field" :label="t('deliveryMethod')" :placeholder="t('allMethods')" :options="methodOptions" />
     </OptionCard>
 
+    <OptionCard
+      icon="merge"
+      :title="t('consolidationTitle')"
+      :subtitle="t('consolidationHint')"
+      optional
+      :active="state.consolidation"
+      @toggle="state.consolidation = $event"
+    >
+      <p class="os-label-s os-text-secondary consolidation-text">{{ t('consolidationActive') }}</p>
+    </OptionCard>
+
     <OptionCard icon="calendar" :title="t('dateTime')" :subtitle="t('dateTimeHint')" optional :active="state.date.enabled" @toggle="toggleDate">
       <label class="native-field field">
         <span class="os-label-text">{{ t('dateTime') }}</span>
@@ -144,6 +155,7 @@ function toggleDate(on: boolean) {
 .row { display: flex; gap: 12px; max-width: 400px; }
 .half { flex: 1; max-width: 175px; }
 .native-field { display: flex; flex-direction: column; gap: 2px; }
+.consolidation-text { margin: 0; max-width: 560px; }
 .os-label-text { font: 500 12px Roboto, sans-serif; color: var(--os-text-secondary); }
 .native-field input {
   height: 36px; box-sizing: border-box; border: 1px solid var(--os-border); border-radius: 5px; padding: 0 12px;

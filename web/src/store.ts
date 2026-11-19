@@ -24,6 +24,8 @@ export const state = reactive({
   price: { enabled: false, value: undefined as number | undefined },
   methods: { enabled: false, values: [] as string[] },
   date: { enabled: false, value: '' },
+  /** Deliver in a minimum of parcels (consolidation at an intermediate point). */
+  consolidation: false,
   running: false,
   error: null as unknown,
   results: null as ResultEntry[] | null,
@@ -167,6 +169,7 @@ export async function runTest() {
       events: ref.scheduled_events ?? [],
       executionTimes: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
       settings: ref.settings,
+      consolidate: state.consolidation,
     });
     state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');

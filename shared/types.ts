@@ -126,6 +126,8 @@ export interface PromiseRoute {
   /** Some versions return the shipping endpoint. */
   endpoint_id?: string;
   origin_endpoint_id?: string;
+  /** Transfer to a consolidation point (local promise). */
+  transfer?: boolean;
 }
 
 export interface PromiseOption {
