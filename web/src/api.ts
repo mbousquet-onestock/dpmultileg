@@ -150,7 +150,7 @@ export const api = {
     }),
   /** Capacities of the day containing `at` (preparation of a stock location, carrier loading there). */
   capacities: (queries: { endpoint: string; carrier?: string; at: number; timezone?: string }[]) =>
-    request<{ results: { ok: boolean; date?: number; capacity?: number | null; consumed?: number; remaining?: number | null; error?: string }[] }>('POST', '/capacities', {
+    request<{ results: { ok: boolean; date?: number; capacity?: number | null; consumed?: number; remaining?: number | null; error?: string }[]; calls?: number; ms?: number }>('POST', '/capacities', {
       queries,
     }),
   /** Items by id (GET /v3/items filters.ids), with their weight and dimensions. */

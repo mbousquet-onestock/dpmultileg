@@ -30,7 +30,24 @@ export const state = reactive({
   error: null as unknown,
   results: null as ResultEntry[] | null,
   selected: -1,
+  /** Durations of the last test (stock, capacities, computation). */
+  stats: null as null | {
+    stock_ms: number;
+    capacity_ms: number;
+    capacity_rounds: number;
+    capacity_queries: number;
+    capacity_calls: number;
+    compute_ms: number;
+    total_ms: number;
+  },
 });
+
+const dayFormatters = new Map<string, Intl.DateTimeFormat>();
+function dayFormatter(tz = 'Europe/Paris') {
+  let f = dayFormatters.get(tz);
+  if (!f) dayFormatters.set(tz, (f = new Intl.DateTimeFormat('en-CA', { timeZone: tz })));
+  return f;
+}
 
 /* ---------------------------------------------------------------- display options (Configuration tab) */
 
@@ -128,22 +145,24 @@ export async function runTest() {
       restrictions: ref.delivery_restrictions ?? [],
     };
 
-    // Items added before their physical data were loaded: reload them (weight / dimensions for the constraints).
+    const t0 = performance.now();
+    // Items added before their physical data were loaded: reload them (weight / dimensions for the constraints),
+    // in parallel with the stock.
     const missing = state.lines.filter((l) => l.item.weight === undefined).map((l) => l.item.id);
-    if (missing.length) {
-      try {
-        const { items: fresh } = await api.itemsByIds(missing, lang.value);
-        for (const f of fresh) {
-          const line = state.lines.find((l) => l.item.id === f.id);
-          if (line) line.item = { ...line.item, ...f, image: line.item.image ?? f.image };
-        }
-      } catch (e) {
-        console.warn('[dpmultileg] items reload failed', e);
-      }
-    }
+    const itemsReload = missing.length
+      ? api
+          .itemsByIds(missing, lang.value)
+          .then(({ items: fresh }) => {
+            for (const f of fresh) {
+              const line = state.lines.find((l) => l.item.id === f.id);
+              if (line) line.item = { ...line.item, ...f, image: line.item.image ?? f.image };
+            }
+          })
+          .catch((e) => console.warn('[dpmultileg] items reload failed', e))
+      : Promise.resolve();
 
-    // Stock of every stock location that may serve the order, read with the stock request of each delivery method
-    // (delivery_configs.stock_request), by chunks of locations.
+    // Stock of every stock location that may serve the order: one call per stock request of the delivery methods
+    // (delivery_configs.stock_request), all in parallel.
     const eps = candidateEndpoints(common);
     const requests = [
       ...new Set(
@@ -153,25 +172,24 @@ export async function runTest() {
       ),
     ];
     const stocks: Record<string, StockLine[] | null> = {};
-    await Promise.all(
-      (requests.length ? requests : [stockRequestOf(undefined)]).map(async (name) => {
-        const lines_: StockLine[] = [];
+    await Promise.all([
+      itemsReload,
+      ...(requests.length ? requests : [stockRequestOf(undefined)]).map(async (name) => {
         try {
-          for (let i = 0; i < eps.length; i += 400) {
-            const res = await api.stocks(
+          stocks[name] = (
+            await api.stocks(
               lines.map((l) => l.item_id),
-              eps.slice(i, i + 400),
+              eps,
               name,
-            );
-            lines_.push(...res.stocks);
-          }
-          stocks[name] = lines_;
+            )
+          ).stocks;
         } catch (e) {
           console.warn(`[dpmultileg] stock (${name}) unavailable, availability not verified`, e);
           stocks[name] = null;
         }
       }),
-    );
+    ]);
+    const t1 = performance.now();
     const stock = Object.values(stocks)[0] ?? null;
 
     // Capacities (GET /capacities) are read for the stock locations / days the computation actually considers:
@@ -185,12 +203,18 @@ export async function runTest() {
       if (capFailed.has(key)) return undefined;
       const hit = capDays.get(key)?.find((d) => d.date <= q.at && q.at < d.until);
       if (hit) return hit;
-      const day = new Intl.DateTimeFormat('en-CA', { timeZone: q.timezone || 'Europe/Paris' }).format(new Date(q.at * 1000));
+      const day = dayFormatter(q.timezone).format(new Date(q.at * 1000));
       capMissing.set(`${key}|${day}`, q);
       return undefined;
     };
-    const compute = () =>
-      computePromise({
+    let computeMs = 0;
+    let capMs = 0;
+    let capCalls = 0;
+    let capQueries = 0;
+    let rounds = 0;
+    const compute = () => {
+      const c0 = performance.now();
+      const r = computePromise({
         ...common,
         lines,
         from,
@@ -205,6 +229,9 @@ export async function runTest() {
         consolidate: state.consolidation,
         capacity,
       });
+      computeMs += performance.now() - c0;
+      return r;
+    };
     let computed = compute();
     // A full day sends the computation to the next day: the following days are fetched with it (7 at a time) until
     // the engine no longer asks for an unknown day.
@@ -215,7 +242,12 @@ export async function runTest() {
       for (let i = 0; i < queries.length; i += 200) {
         const batch = queries.slice(i, i + 200);
         try {
-          const { results } = await api.capacities(batch.map((q) => ({ endpoint: q.endpoint, carrier: q.carrier, at: q.at, timezone: q.timezone })));
+          const k0 = performance.now();
+          rounds++;
+          capQueries += batch.length;
+          const { results, calls } = await api.capacities(batch.map((q) => ({ endpoint: q.endpoint, carrier: q.carrier, at: q.at, timezone: q.timezone })));
+          capMs += performance.now() - k0;
+          capCalls += calls ?? batch.length;
           batch.forEach((q, k) => {
             const r = results[k];
             const key = capKey(q);
@@ -243,6 +275,16 @@ export async function runTest() {
     if (capMissing.size) computed = compute();
 
     const options = computed;
+    state.stats = {
+      stock_ms: Math.round(t1 - t0),
+      capacity_ms: Math.round(capMs),
+      capacity_rounds: rounds,
+      capacity_queries: capQueries,
+      capacity_calls: capCalls,
+      compute_ms: Math.round(computeMs),
+      total_ms: Math.round(performance.now() - t0),
+    };
+    console.info('[dpmultileg] promise timings', state.stats);
     state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
     state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;

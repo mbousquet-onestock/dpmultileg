@@ -3,7 +3,7 @@ import { OsBadge, OsIcon, OsPicto } from '@onestock-public/design-system';
 import { shipmentsFromPromise, isClickAndCollect } from '@shared/logistics';
 import type { PromiseOption } from '@shared/types';
 import { formatMoney, formatRange, t } from '../i18n';
-import { currency, state, zoneCtx } from '../store';
+import { currency, display, state, zoneCtx } from '../store';
 
 function statusColor(o: PromiseOption) {
   if (o.status.startsWith('valid')) return 'green';
@@ -20,6 +20,17 @@ function legsCount(o: PromiseOption): number {
 
 <template>
   <div class="results">
+    <p v-if="display.loadReport && state.stats" class="os-body-s os-text-secondary stats">
+      {{
+        t('statsLine')
+          .replace('{total}', String(state.stats.total_ms))
+          .replace('{stock}', String(state.stats.stock_ms))
+          .replace('{cap}', String(state.stats.capacity_ms))
+          .replace('{calls}', String(state.stats.capacity_calls))
+          .replace('{rounds}', String(state.stats.capacity_rounds))
+          .replace('{compute}', String(state.stats.compute_ms))
+      }}
+    </p>
     <button
       v-for="(entry, idx) in state.results ?? []"
       :key="`${entry.option.delivery_method}-${idx}`"
@@ -56,6 +67,7 @@ function legsCount(o: PromiseOption): number {
 </template>
 
 <style scoped>
+.stats { margin: 0 0 4px; }
 .results { display: flex; flex-direction: column; gap: 8px; }
 .result {
   display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid var(--os-border); border-radius: 5px; background: #fff;

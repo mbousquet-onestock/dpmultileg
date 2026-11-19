@@ -555,9 +555,9 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     start: number,
     track: 'min' | 'max',
     delays: CapacityDelay[],
-    opts: { prepare?: boolean; transfer?: boolean } = {},
+    opts: { prepare?: boolean; transfer?: boolean; noCapacity?: boolean } = {},
   ) => {
-    const cap = input.capacity;
+    const cap = opts.noCapacity ? undefined : input.capacity;
     const tz = ep?.timezone;
     const transfer = opts.transfer || undefined;
     let t = start;
@@ -604,13 +604,13 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     return { fast, slow, future };
   };
   /** Timing of a shipment from a stock location: preparation once the stock is there, carrier timetables, receiving. */
-  const timeFrom = (routes: DeliveryRoute[], endpoint: string | undefined, ls: LineItem[]): ShipTiming | undefined => {
+  const timeFrom = (routes: DeliveryRoute[], endpoint: string | undefined, ls: LineItem[], noCapacity = false): ShipTiming | undefined => {
     const ep = endpoint ? ctx.endpoints.get(endpoint) : undefined;
     const ready = readyAt(endpoint, ls);
     const nLines = ls.length || lines.length;
     const delays: CapacityDelay[] = [];
-    const f = capacityTimed(routes, ep, nLines, ready.fast, 'min', []);
-    const sl = capacityTimed(routes, ep, nLines, ready.slow, 'max', delays);
+    const f = capacityTimed(routes, ep, nLines, ready.fast, 'min', [], { noCapacity });
+    const sl = capacityTimed(routes, ep, nLines, ready.slow, 'max', delays, { noCapacity });
     if (!f || !sl) return undefined;
     const prepSlow = sl.prep;
     const fast = f.legs;
@@ -668,9 +668,16 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     const routes = schema.legs.map((l) => l.route);
     const withStock = originEndpoints.filter((id) => stockUnverified || stockLines.every((sl) => sl.endpoints.some((e) => e.id === id)));
     const candidates = (withStock.length ? withStock : originEndpoints).slice(0, 25);
+    // Best stock location: timings without capacities first (a capacity can only postpone), then the capacities of
+    // the locations in that order, stopping as soon as the next one cannot do better: few capacity calls.
+    const raw = (candidates.length ? candidates : [undefined])
+      .map((id) => timeFrom(routes, id, lines, true))
+      .filter((x): x is ShipTiming => !!x)
+      .sort((x, y) => x.endSlow - y.endSlow);
     let best: ShipTiming | undefined;
-    for (const id of candidates.length ? candidates : [undefined]) {
-      const t = timeFrom(routes, id, lines);
+    for (const r of raw) {
+      if (best && r.endSlow >= best.endSlow) break;
+      const t = input.capacity ? timeFrom(routes, r.endpoint, lines) : r;
       if (t && (!best || t.endSlow < best.endSlow)) best = t;
     }
     if (!best || !atStart)
@@ -882,25 +889,31 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
             continue;
           }
           let best: ConsolidationTransfer | undefined;
+          // candidate origins timed without capacities, then with them in that order until none can arrive earlier
+          const raw: { chain: LogisticSchema; routes: DeliveryRoute[]; from: string; arrival: number }[] = [];
           for (const chain of chainsTo(point.id)) {
             const chainRoutes = chain.legs.map((x) => x.route);
             if (chainRoutes.some((r) => !selectVariant(r, [l], items, orderPrice).variant)) continue;
             for (const from of zoneEndpoints(ctx.zones.get(chain.originZoneId ?? ''), ctx).slice(0, 25)) {
               if (from.id === point.id || !availability(stock, from.id, l.item_id, l.qty)) continue;
-              // preparation and pickup at the origin of the transfer, within the capacities of the day
-              const trDelays: CapacityDelay[] = [];
-              const timed = capacityTimed(chainRoutes, ctx.endpoints.get(from.id), 1, readyAt(from.id, [l]).slow, 'max', trDelays, { transfer: true });
-              if (!timed) continue;
-              const legs = timed.legs;
-              const arrival = legs[legs.length - 1].delivered;
-              if (!best || arrival < best.arrival) {
-                const tmvs = chainRoutes.map((r) => selectVariant(r, [l], items, orderPrice).variant?.metric_values ?? r.metric_values ?? {});
-                const cost = tmvs.reduce((sum, mv) => sum + (mv.cost_by_parcel ?? mv.cost ?? 0), 0);
-                const carbon = tmvs.some((mv) => mv.carbon_footprint !== undefined)
-                  ? tmvs.reduce((sum, mv) => sum + (mv.carbon_footprint ?? 0), 0)
-                  : undefined;
-                best = { item_id: l.item_id, qty: l.qty, from: from.id, schema: chain, timeline: legs, arrival, cost, carbon, capacity_delays: trDelays };
-              }
+              const timed = capacityTimed(chainRoutes, ctx.endpoints.get(from.id), 1, readyAt(from.id, [l]).slow, 'max', [], { transfer: true, noCapacity: true });
+              if (timed) raw.push({ chain, routes: chainRoutes, from: from.id, arrival: timed.legs[timed.legs.length - 1].delivered });
+            }
+          }
+          raw.sort((x, y) => x.arrival - y.arrival);
+          for (const c of raw) {
+            if (best && c.arrival >= best.arrival) break;
+            // preparation and pickup at the origin of the transfer, within the capacities of the day
+            const trDelays: CapacityDelay[] = [];
+            const timed = capacityTimed(c.routes, ctx.endpoints.get(c.from), 1, readyAt(c.from, [l]).slow, 'max', trDelays, { transfer: true });
+            if (!timed) continue;
+            const legs = timed.legs;
+            const arrival = legs[legs.length - 1].delivered;
+            if (!best || arrival < best.arrival) {
+              const tmvs = c.routes.map((r) => selectVariant(r, [l], items, orderPrice).variant?.metric_values ?? r.metric_values ?? {});
+              const cost = tmvs.reduce((sum, mv) => sum + (mv.cost_by_parcel ?? mv.cost ?? 0), 0);
+              const carbon = tmvs.some((mv) => mv.carbon_footprint !== undefined) ? tmvs.reduce((sum, mv) => sum + (mv.carbon_footprint ?? 0), 0) : undefined;
+              best = { item_id: l.item_id, qty: l.qty, from: c.from, schema: c.chain, timeline: legs, arrival, cost, carbon, capacity_delays: trDelays };
             }
           }
           if (!best) {

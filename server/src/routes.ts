@@ -253,40 +253,39 @@ export function apiRouter(): Router {
     wrap(async (req, res) => {
       const t = target(req.session!);
       const itemIds = Array.isArray(req.body?.item_ids) ? (req.body.item_ids as unknown[]).map(String).slice(0, 50) : [];
-      const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 500) : [];
+      const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 5000) : [];
       if (!itemIds.length || !endpointIds.length) return res.json({ stocks: [] });
       const wanted = new Set(endpointIds);
       // Stock request of the delivery method (delivery_configs.stock_request): detailed, detailed_ois...
       const requestName = (typeof req.body?.request_name === 'string' && req.body.request_name.trim()) || 'detailed';
-      // Stock types of the site (on hand type, future types such as asn): GET /configurations, cached.
-      let types: StockTypes | undefined;
-      try {
-        types = await loadStockTypes(t);
-      } catch (e) {
-        log('warn', 'stock_types_failed', { request_id: req.requestId, ...errorFields(e) });
-      }
-      // One request: GET /stock_export (detailed_ois) returns the stock and the future stock (ASN, purchase orders:
-      // quantity available between eta_start and eta_end). GET /stocks only when the export has no current stock line
-      // for these locations, or when it fails.
+      // Stock types of the site (GET /configurations, cached) and the stock in parallel.
+      // One request: GET /stock_export (request of the delivery method) returns the stock of every location and the
+      // future stock (ASN...); GET /stocks (by chunks of locations) only when the export fails.
+      const started = Date.now();
+      const [types, exported] = await Promise.all([
+        loadStockTypes(t).catch((e) => {
+          log('warn', 'stock_types_failed', { request_id: req.requestId, ...errorFields(e) });
+          return undefined;
+        }),
+        callOnestock(t, 'GET', '/stock_export', { request_name: requestName, aggregates: { '*': { item_filter: { ids: itemIds } } } }).then(
+          (v) => ({ ok: true as const, v }),
+          (e: unknown) => ({ ok: false as const, e }),
+        ),
+      ]);
       let stocks: StockLine[] = [];
       let exportError: string | undefined;
       let source = 'stock_export';
-      try {
-        const exported = await callOnestock(t, 'GET', '/stock_export', {
-          request_name: requestName,
-          aggregates: { '*': { item_filter: { ids: itemIds } } },
-        });
-        stocks = collectStockLines(exported).filter((l) => wanted.has(l.endpoint_id) && itemIds.includes(l.item_id));
-      } catch (e) {
-        exportError = e instanceof Error ? e.message : String(e);
-        log('warn', 'stock_export_failed', { request_id: req.requestId, ...errorFields(e) });
+      if (exported.ok) stocks = collectStockLines(exported.v).filter((l) => wanted.has(l.endpoint_id) && itemIds.includes(l.item_id));
+      else {
+        exportError = exported.e instanceof Error ? exported.e.message : String(exported.e);
+        log('warn', 'stock_export_failed', { request_id: req.requestId, ...errorFields(exported.e) });
+        source = 'stocks';
+        const chunks: string[][] = [];
+        for (let i = 0; i < endpointIds.length; i += 400) chunks.push(endpointIds.slice(i, i + 400));
+        const results = await Promise.all(chunks.map((c) => callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: c })));
+        for (const r of results) stocks.push(...collectStockLines(r).filter((l) => l.eta_end === undefined));
       }
-      if (!stocks.some((l) => l.eta_end === undefined)) {
-        source = exportError ? 'stocks' : 'stock_export+stocks';
-        const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
-        stocks.push(...collectStockLines(result).filter((l) => l.eta_end === undefined));
-      }
-      res.json({ stocks: applyStockTypes(stocks, types), request_name: requestName, source, stock_types: types, stock_export_error: exportError });
+      res.json({ stocks: applyStockTypes(stocks, types), request_name: requestName, source, ms: Date.now() - started, stock_types: types, stock_export_error: exportError });
     }),
   );
 
@@ -300,21 +299,28 @@ export function apiRouter(): Router {
       const t = target(req.session!);
       type Q = { endpoint?: unknown; carrier?: unknown; at?: unknown; timezone?: unknown };
       const queries = (Array.isArray(req.body?.queries) ? (req.body.queries as Q[]) : []).slice(0, 200);
-      const results = await Promise.all(
-        queries.map(async (q, i) => {
-          await new Promise((ok) => setTimeout(ok, Math.floor(i / 10) * 50)); // spread the calls
+      const started = Date.now();
+      let calls = 0;
+      const results = await pool(queries, 20, async (q) => {
           const endpoint = str(q.endpoint);
           const at = Number(q.at);
           if (!endpoint || !Number.isFinite(at)) return { ok: false, error: 'invalid query' };
           const links: { type: string; entity_id: string }[] = [{ type: 'endpoint', entity_id: endpoint }];
           if (str(q.carrier)) links.push({ type: 'carrier', entity_id: str(q.carrier)! });
           try {
-            const r = (await callOnestock(t, 'GET', '/capacities', {
-              links,
-              at_date: String(Math.floor(at)),
-              locale: 'fr_FR',
-              location: str(q.timezone) ?? 'Europe/Paris',
-            })) as { capacity?: { date?: number; capacities?: unknown; defaults?: unknown; consumed?: unknown } };
+            const location = str(q.timezone) ?? 'Europe/Paris';
+            // short cache per links / day: the same day is asked by several computations
+            const day = new Intl.DateTimeFormat('en-CA', { timeZone: location }).format(new Date(at * 1000));
+            const key = `${t.site_id}|${t.environment}|${links.map((l) => l.entity_id).join('+')}|${day}`;
+            const hit = capacityCache.get(key);
+            let r: { capacity?: { date?: number; capacities?: unknown; defaults?: unknown; consumed?: unknown } };
+            if (hit && Date.now() - hit.at < 60_000) r = hit.value as typeof r;
+            else {
+              calls++;
+              r = (await callOnestock(t, 'GET', '/capacities', { links, at_date: String(Math.floor(at)), locale: 'fr_FR', location })) as typeof r;
+              capacityCache.set(key, { at: Date.now(), value: r });
+              if (capacityCache.size > 5000) capacityCache.delete(capacityCache.keys().next().value!);
+            }
             const c = r?.capacity ?? {};
             const num = (v: unknown) => (v === null || v === undefined || v === '' ? undefined : /inf/i.test(String(v)) ? Infinity : Number(v));
             const capacity = num(c.capacities) ?? num(c.defaults) ?? Infinity;
@@ -329,9 +335,8 @@ export function apiRouter(): Router {
           } catch (e) {
             return { ok: false, error: e instanceof Error ? e.message : String(e) };
           }
-        }),
-      );
-      res.json({ results });
+      });
+      res.json({ results, calls, ms: Date.now() - started });
     }),
   );
 
@@ -734,6 +739,24 @@ async function loadReferential(t: Target, requestId?: string) {
 /** Stock types of the site: GET /configurations {keys: ['stock'], scopes: {site: true}}. */
 function loadStockTypes(t: Target): Promise<StockTypes | undefined> {
   return cached(t, 'stock_types', async () => parseStockTypes(await callOnestock(t, 'GET', '/configurations', { keys: ['stock'], scopes: { site: true } })));
+}
+
+/** Capacities read in the last minute (links / day). */
+const capacityCache = new Map<string, { at: number; value: unknown }>();
+
+/** Run fn on every element with at most `size` calls at the same time, results in order. */
+async function pool<T, R>(list: T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(list.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(size, list.length) }, async () => {
+      while (next < list.length) {
+        const i = next++;
+        out[i] = await fn(list[i]);
+      }
+    }),
+  );
+  return out;
 }
 
 /** Run calls by batches of 10, dropping undefined results. */
