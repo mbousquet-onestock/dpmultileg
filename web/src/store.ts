@@ -42,7 +42,7 @@ function readDisplay() {
     return {};
   }
 }
-const defaults = { loadReport: false, config: false, timeline: false, reasons: false };
+const defaults = { loadReport: false, config: false, consolidation: false, timeline: false, reasons: false };
 /** What the delivery promise panel shows: hidden by default, enabled from the Configuration tab. */
 export const display = reactive({ ...defaults, ...readDisplay() });
 watch(display, (v) => {

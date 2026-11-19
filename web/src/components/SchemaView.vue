@@ -231,7 +231,7 @@ function chainLegs(a: SchemaAnalysis) {
         :title="t('excludedItems')"
         :subtitle="option.excluded_line_items.map((l) => `${itemLabel(l.item_id)} × ${l.qty}`).join(', ')"
       />
-      <div v-if="option.consolidation" class="consolidation">
+      <div v-if="display.consolidation && option.consolidation" class="consolidation">
         <div class="cons-head">
           <OsIcon icon="merge" color="brand" />
           <span class="os-label-l">{{ t('consolidationAt').replace('{point}', endpointName(option.consolidation.point)) }}</span>
