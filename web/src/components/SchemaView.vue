@@ -271,9 +271,8 @@ function chainLegs(a: SchemaAnalysis) {
       <OsDivider />
 
       <section class="block">
-        <div class="section-head">
-          <span class="os-label-l">{{ t('schemaTheoretical') }}</span>
-          <span v-if="display.config" class="os-body-s os-text-secondary">{{ t('schemaTheoreticalHint') }}</span>
+        <div v-if="display.config" class="section-head">
+          <span class="os-body-s os-text-secondary">{{ t('schemaTheoreticalHint') }}</span>
         </div>
         <div v-if="display.config && data.entry.config" class="config os-body-s">
           <span class="os-text-secondary">{{ t('carrier') }} :</span>

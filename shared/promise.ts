@@ -130,6 +130,7 @@ export interface ConsolidationTransfer {
   /** Arrival at the consolidation point. */
   arrival: number;
   cost?: number;
+  carbon?: number;
 }
 
 export interface Consolidation {
@@ -146,6 +147,7 @@ export interface Consolidation {
   eta_start: number;
   eta_end: number;
   cost: number;
+  carbon?: number;
   shipping_fees?: number;
 }
 
@@ -641,6 +643,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         cutoff: c.analysis.cutoff,
         cost: Math.round(c.cost * 100) / 100,
         shipping_fees: c.shipping_fees === undefined ? undefined : Math.round(c.shipping_fees * 100) / 100,
+        carbon_footprint: c.carbon,
         shipment_number: 1,
         delivery_routes: [...transferRoutes, ...finalRoutes],
         consolidation: c,
@@ -694,11 +697,12 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
               if (!legs) continue;
               const arrival = legs[legs.length - 1].delivered;
               if (!best || arrival < best.arrival) {
-                const cost = chainRoutes.reduce((sum, r) => {
-                  const mv = selectVariant(r, [l], items, orderPrice).variant?.metric_values ?? r.metric_values ?? {};
-                  return sum + (mv.cost_by_parcel ?? mv.cost ?? 0);
-                }, 0);
-                best = { item_id: l.item_id, qty: l.qty, from: from.id, schema: chain, timeline: legs, arrival, cost };
+                const tmvs = chainRoutes.map((r) => selectVariant(r, [l], items, orderPrice).variant?.metric_values ?? r.metric_values ?? {});
+                const cost = tmvs.reduce((sum, mv) => sum + (mv.cost_by_parcel ?? mv.cost ?? 0), 0);
+                const carbon = tmvs.some((mv) => mv.carbon_footprint !== undefined)
+                  ? tmvs.reduce((sum, mv) => sum + (mv.carbon_footprint ?? 0), 0)
+                  : undefined;
+                best = { item_id: l.item_id, qty: l.qty, from: from.id, schema: chain, timeline: legs, arrival, cost, carbon };
               }
             }
           }
@@ -721,6 +725,8 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         if (!afterFast || !afterSlow) continue;
         const mvs = finalCosts.map((v, i) => v.variant?.metric_values ?? a.schema.legs[i].route.metric_values ?? {});
         const finalCost = mvs.reduce((sum, mv) => sum + (mv.cost_by_parcel ?? mv.cost ?? 0), 0);
+        const carbonParts = [...mvs.map((mv) => mv.carbon_footprint), ...transfers.map((tr) => tr.carbon)];
+        const carbon = carbonParts.some((v) => v !== undefined) ? carbonParts.reduce<number>((sum, v) => sum + (v ?? 0), 0) : undefined;
         const fees = mvs.some((mv) => mv.shipping_fees !== undefined) ? mvs.reduce((sum, mv) => sum + (mv.shipping_fees ?? 0), 0) : undefined;
         candidates.push({
           point: point.id,
@@ -732,6 +738,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
           eta_start: afterFast.end,
           eta_end: afterSlow.end,
           cost: finalCost + transfers.reduce((sum, tr) => sum + (tr.cost ?? 0), 0),
+          carbon,
           shipping_fees: fees,
         });
       }
