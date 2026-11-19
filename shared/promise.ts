@@ -58,6 +58,8 @@ export interface PromiseInput {
   items: Map<string, Item>;
   /** Stock lines; null when the stock could not be read (stock is then assumed available). */
   stock: StockLine[] | null;
+  /** Stock per stock request (delivery_configs.stock_request: detailed, detailed_ois...); else `stock` is used. */
+  stocks?: Record<string, StockLine[] | null>;
   price?: number;
   /** Carrier timetables (GET /timetables) by id, and scheduled events (GET /scheduledevents). */
   timetables?: Map<string, Timetable>;
@@ -333,6 +335,12 @@ function stockOf(stock: StockLine[], endpoint: string, item: string): number {
     .reduce((n, s) => n + s.quantity, 0);
 }
 
+/** Stock request of a delivery method (GET /stock_export request_name). */
+export const DEFAULT_STOCK_REQUEST = 'detailed';
+export function stockRequestOf(config: DeliveryConfig | undefined): string {
+  return (typeof config?.stock_request === 'string' && config.stock_request) || DEFAULT_STOCK_REQUEST;
+}
+
 /** Future stock line used to serve a line (ASN, purchase order...). */
 export interface FutureStockUse {
   item_id: string;
@@ -466,9 +474,11 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   if (!config) return { ...base, status: 'none', reason: 'missing_config' };
   if (lines.some((l) => !items.has(l.item_id))) return { ...base, config, status: 'none', reason: 'invalid_item' };
 
-  const stockUnverified = input.stock === null;
+  // Stock read with the stock request of the delivery method (delivery_configs.stock_request).
+  const methodStock = input.stocks && stockRequestOf(config) in input.stocks ? input.stocks[stockRequestOf(config)] : input.stock;
+  const stockUnverified = methodStock === null;
   const orderPrice = orderPriceOf(lines, items, input.price);
-  const stock = input.stock ?? [];
+  const stock = methodStock ?? [];
   const order = prioritiesFor(config, input.sortOrders, input.salesChannel, settingsPriorities(input.settings, method)).order;
   // Only the restrictions applied by this delivery method (delivery_configs.applied_restrictions).
   const applied = input.restrictions.filter((r) => config.applied_restrictions?.includes(r.id));

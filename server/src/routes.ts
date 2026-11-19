@@ -256,6 +256,8 @@ export function apiRouter(): Router {
       const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 500) : [];
       if (!itemIds.length || !endpointIds.length) return res.json({ stocks: [] });
       const wanted = new Set(endpointIds);
+      // Stock request of the delivery method (delivery_configs.stock_request): detailed, detailed_ois...
+      const requestName = (typeof req.body?.request_name === 'string' && req.body.request_name.trim()) || 'detailed';
       // Stock types of the site (on hand type, future types such as asn): GET /configurations, cached.
       let types: StockTypes | undefined;
       try {
@@ -271,7 +273,7 @@ export function apiRouter(): Router {
       let source = 'stock_export';
       try {
         const exported = await callOnestock(t, 'GET', '/stock_export', {
-          request_name: 'detailed_ois',
+          request_name: requestName,
           aggregates: { '*': { item_filter: { ids: itemIds } } },
         });
         stocks = collectStockLines(exported).filter((l) => wanted.has(l.endpoint_id) && itemIds.includes(l.item_id));
@@ -284,7 +286,7 @@ export function apiRouter(): Router {
         const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
         stocks.push(...collectStockLines(result).filter((l) => l.eta_end === undefined));
       }
-      res.json({ stocks: applyStockTypes(stocks, types), source, stock_types: types, stock_export_error: exportError });
+      res.json({ stocks: applyStockTypes(stocks, types), request_name: requestName, source, stock_types: types, stock_export_error: exportError });
     }),
   );
 

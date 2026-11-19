@@ -1,5 +1,5 @@
 import { deliveryMethods, type StockLine, type ZoneContext } from '@shared/logistics';
-import { candidateEndpoints, computePromise, type LocalPromiseOption } from '@shared/promise';
+import { candidateEndpoints, computePromise, stockRequestOf, type LocalPromiseOption } from '@shared/promise';
 import type { DeliveryConfig, Destination, Endpoint, Item } from '@shared/types';
 import { computed, reactive, watch } from 'vue';
 import { api, type Referential } from './api';
@@ -142,21 +142,37 @@ export async function runTest() {
       }
     }
 
-    // Stock of every stock location that may serve the order (GET /stocks, by chunks).
+    // Stock of every stock location that may serve the order, read with the stock request of each delivery method
+    // (delivery_configs.stock_request), by chunks of locations.
     const eps = candidateEndpoints(common);
-    let stock: StockLine[] | null = [];
-    try {
-      for (let i = 0; i < eps.length; i += 400) {
-        const res = await api.stocks(
-          lines.map((l) => l.item_id),
-          eps.slice(i, i + 400),
-        );
-        stock.push(...res.stocks);
-      }
-    } catch (e) {
-      console.warn('[dpmultileg] stock unavailable, availability not verified', e);
-      stock = null;
-    }
+    const requests = [
+      ...new Set(
+        ref.delivery_configs
+          .filter((c) => methods.includes(c.delivery_method) && (!c.sales_channel_id || c.sales_channel_id === state.salesChannel))
+          .map((c) => stockRequestOf(c)),
+      ),
+    ];
+    const stocks: Record<string, StockLine[] | null> = {};
+    await Promise.all(
+      (requests.length ? requests : [stockRequestOf(undefined)]).map(async (name) => {
+        const lines_: StockLine[] = [];
+        try {
+          for (let i = 0; i < eps.length; i += 400) {
+            const res = await api.stocks(
+              lines.map((l) => l.item_id),
+              eps.slice(i, i + 400),
+              name,
+            );
+            lines_.push(...res.stocks);
+          }
+          stocks[name] = lines_;
+        } catch (e) {
+          console.warn(`[dpmultileg] stock (${name}) unavailable, availability not verified`, e);
+          stocks[name] = null;
+        }
+      }),
+    );
+    const stock = Object.values(stocks)[0] ?? null;
 
     const options = computePromise({
       ...common,
@@ -164,6 +180,7 @@ export async function runTest() {
       from,
       items: new Map(state.lines.map((l) => [l.item.id, l.item])),
       stock,
+      stocks,
       price: state.price.enabled ? state.price.value : undefined,
       timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
       events: ref.scheduled_events ?? [],

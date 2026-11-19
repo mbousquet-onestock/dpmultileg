@@ -245,6 +245,14 @@ describe('future stock (ASN)', () => {
     expect(later.eta_end!).toBeGreaterThan(asn.eta_end);
   });
 
+  it('reads the stock of the stock request of the delivery method', () => {
+    // HD_standard has no stock_request: the default request "detailed" is used
+    expect(run('HD_standard', [['WATCH_STEEL_SV', 5]], paris, { stocks: { detailed_ois: [...stock, asn] } }).status).toBe('none');
+    expect(run('HD_standard', [['WATCH_STEEL_SV', 5]], paris, { stocks: { detailed: [...stock, asn] } }).status).not.toBe('none');
+    const cfg = mockConfigs.map((c) => (c.delivery_method === 'HD_standard' ? { ...c, stock_request: 'detailed_ois' } : c));
+    expect(run('HD_standard', [['WATCH_STEEL_SV', 5]], paris, { configs: cfg, stocks: { detailed: stock, detailed_ois: [...stock, asn] } }).status).not.toBe('none');
+  });
+
   it('prefers the stock on hand to the future stock', () => {
     const o = run('HD_standard', [['WATCH_STEEL_SV', 1]], paris, { stock: [...stock, asn] });
     expect(o.future_stock).toBeUndefined();

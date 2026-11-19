@@ -142,8 +142,12 @@ export const api = {
   /** Items are fetched 5 by 5 ("Show more" loads the next page). */
   searchItems: (pattern: string, lang: string, start = 0, limit = 5) =>
     request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit }),
-  stocks: (itemIds: string[], endpointIds: string[]) =>
-    request<{ stocks: StockLine[]; source?: string; stock_types?: StockTypes; stock_export_error?: string }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),
+  stocks: (itemIds: string[], endpointIds: string[], requestName?: string) =>
+    request<{ stocks: StockLine[]; request_name?: string; source?: string; stock_types?: StockTypes; stock_export_error?: string }>('POST', '/stocks', {
+      item_ids: itemIds,
+      endpoint_ids: endpointIds,
+      request_name: requestName,
+    }),
   /** Items by id (GET /v3/items filters.ids), with their weight and dimensions. */
   itemsByIds: (ids: string[], lang: string) => request<{ items: Item[]; total: number }>('POST', '/items/search', { ids, lang, limit: Math.min(ids.length, 50) }),
   searchEndpoints: (query: string) => request<{ endpoints: Endpoint[] }>('POST', '/endpoints/search', { query }),
