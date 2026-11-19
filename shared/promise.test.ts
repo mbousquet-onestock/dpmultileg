@@ -318,6 +318,16 @@ describe('capacities', () => {
     expect(o.eta_start!).toBeGreaterThan(first + 10 * DAY);
   });
 
+  it('applies the preparation capacity of the store to the click & collect', () => {
+    const base = run('CKC', [['SCARF_WOOL_RD', 1]], { endpoint_id: 'ST_PARIS' });
+    const o = run('CKC', [['SCARF_WOOL_RD', 1]], { endpoint_id: 'ST_PARIS' }, {
+      capacity: (q) => (q.kind === 'preparation' && q.endpoint === 'ST_PARIS' ? { remaining: dayOf(q.at) <= dayOf(base.eta_end!) + DAY ? 0 : 4, until: dayOf(q.at) + DAY } : undefined),
+    });
+    expect(o.local_pickup).toBe(true);
+    expect(o.capacity_delays?.[0]).toMatchObject({ kind: 'preparation', endpoint: 'ST_PARIS' });
+    expect(o.eta_end!).toBeGreaterThan(dayOf(base.eta_end!) + 2 * DAY - 1);
+  });
+
   it('ignores unknown capacities', () => {
     const base = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
     const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { capacity: () => undefined });

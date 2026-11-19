@@ -709,8 +709,19 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   // Click & collect served by the stock of the collection store itself (no transport).
   if (isClickAndCollect(config) && destination.endpoint_id && !stockUnverified && lines.every((l) => availability(stock, destination.endpoint_id!, l.item_id, l.qty))) {
     const there = readyAt(destination.endpoint_id, lines);
-    const local = runOperations('from_destination', config, destEndpoint, there.slow, timing);
-    const end = local?.end ?? started;
+    // preparation in the collection store, within its preparation capacity (order lines): next day while full
+    const ccDelays: CapacityDelay[] = [];
+    let t = there.slow;
+    let local = runOperations('from_destination', config, destEndpoint, t, timing);
+    for (let day = 0; day < MAX_CAPACITY_DAYS && input.capacity && destEndpoint; day++) {
+      const at = local?.end ?? t;
+      const pc = input.capacity({ kind: 'preparation', endpoint: destEndpoint.id, at, timezone: destEndpoint.timezone, needed: lines.length });
+      if (!pc || pc.remaining >= lines.length || pc.until <= t) break;
+      ccDelays.push({ kind: 'preparation', endpoint: destEndpoint.id, day: pc.until - 86400, remaining: Math.max(0, pc.remaining), needed: lines.length });
+      t = pc.until;
+      local = runOperations('from_destination', config, destEndpoint, t, timing);
+    }
+    const end = local?.end ?? t;
     const h = (end - from) / 3600;
     return {
       ...base,
@@ -726,6 +737,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       shipment_number: 1,
       delivery_routes: [],
       future_stock: there.future.length ? there.future : undefined,
+      capacity_delays: ccDelays.length ? ccDelays : undefined,
     };
   }
   if (!schemas.length) return { ...base, config, analysis, operations_hours: opsHours, status: 'none', reason: 'no_eligible_route' };
