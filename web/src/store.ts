@@ -206,27 +206,41 @@ export async function runTest() {
         capacity,
       });
     let computed = compute();
-    for (let round = 0; round < 6 && capMissing.size; round++) {
-      const queries = [...capMissing.values()].slice(0, 200);
+    // A full day sends the computation to the next day: the following days are fetched with it (7 at a time) until
+    // the engine no longer asks for an unknown day.
+    const known = (key: string, at: number) => capFailed.has(key) || !!capDays.get(key)?.some((d) => d.date <= at && at < d.until);
+    for (let round = 0; round < 30 && capMissing.size; round++) {
+      const queries = [...capMissing.values()];
       capMissing = new Map();
-      try {
-        const { results } = await api.capacities(queries.map((q) => ({ endpoint: q.endpoint, carrier: q.carrier, at: q.at, timezone: q.timezone })));
-        queries.forEach((q, i) => {
-          const r = results[i];
-          const key = capKey(q);
-          if (!r?.ok) return capFailed.add(key);
-          const date = r.date ?? q.at - (q.at % 86400);
-          const list = capDays.get(key) ?? [];
-          if (!list.some((d) => d.date === date))
-            list.push({ date, until: date + 86400, remaining: r.remaining ?? Infinity, capacity: r.capacity ?? undefined });
-          capDays.set(key, list);
-        });
-      } catch (e) {
-        console.warn('[dpmultileg] capacities unavailable', e);
-        for (const q of queries) capFailed.add(capKey(q));
+      for (let i = 0; i < queries.length; i += 200) {
+        const batch = queries.slice(i, i + 200);
+        try {
+          const { results } = await api.capacities(batch.map((q) => ({ endpoint: q.endpoint, carrier: q.carrier, at: q.at, timezone: q.timezone })));
+          batch.forEach((q, k) => {
+            const r = results[k];
+            const key = capKey(q);
+            if (!r?.ok) return capFailed.add(key);
+            const date = r.date ?? q.at - (q.at % 86400);
+            const list = capDays.get(key) ?? [];
+            if (!list.some((d) => d.date === date)) list.push({ date, until: date + 86400, remaining: r.remaining ?? Infinity, capacity: r.capacity ?? undefined });
+            capDays.set(key, list);
+            // day full: look at the next days at once
+            if ((r.remaining ?? Infinity) < q.needed)
+              for (let n = 1; n <= 7; n++) {
+                const at = date + n * 86400 + 43200;
+                if (!known(key, at)) capacity({ ...q, at });
+              }
+          });
+        } catch (e) {
+          console.warn('[dpmultileg] capacities unavailable', e);
+          for (const q of batch) capFailed.add(capKey(q));
+        }
       }
+      // fetch the prefetched days before computing again
+      if (capMissing.size && [...capMissing.values()].every((q) => queries.some((x) => capKey(x) === capKey(q)))) continue;
       computed = compute();
     }
+    if (capMissing.size) computed = compute();
 
     const options = computed;
     state.results = options.map((option) => ({ option, config: option.config }));

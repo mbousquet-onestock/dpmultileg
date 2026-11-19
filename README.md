@@ -19,7 +19,9 @@ Une extension UI OneStock (`bo.page`) qui permet de :
    - `GET /capacities` : capacité de préparation d'un lieu de stock en lignes de commande (`links: [endpoint]`) et
      capacité de chargement d'un transporteur en colis à ce lieu (`links: [endpoint, carrier]`, carrier = `name` des
      `carriers` de la delivery_config), pour le jour contenant `at_date`. Restant = (`capacities` sinon `defaults`) −
-     `consumed`. Jour plein : la préparation (ou l'enlèvement) est reportée au jour suivant. Seuls les lieux / jours
+     `consumed`. Jour plein : la préparation (ou l'enlèvement) est reportée au jour suivant, puis au suivant, jusqu'au
+     premier jour avec de la capacité (90 jours maximum ; les 7 jours suivants un jour plein sont lus d'un coup). Les
+     capacités s'appliquent aussi aux transferts vers le point de consolidation et au colis regroupé. Seuls les lieux / jours
      réellement envisagés par le calcul sont interrogés ; capacité inconnue ou en erreur = illimitée.
    - les grilles de coûts des routes, évaluées sur les caractéristiques des articles (poids, quantité) et le prix de la commande ;
 4. **voir le schéma logistique** de chaque option : la ou les routes sélectionnées selon les priorités du mode (par exemple la plus rapide parmi celles qui ont le stock), et pour chaque autre schéma la raison pour laquelle il n'est pas retenu (pas de stock, restriction, contrainte colis, critère de priorité).

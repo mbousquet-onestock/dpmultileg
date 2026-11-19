@@ -146,6 +146,7 @@ export interface ConsolidationTransfer {
   arrival: number;
   cost?: number;
   carbon?: number;
+  capacity_delays?: CapacityDelay[];
 }
 
 export interface Consolidation {
@@ -164,6 +165,7 @@ export interface Consolidation {
   cost: number;
   carbon?: number;
   shipping_fees?: number;
+  capacity_delays?: CapacityDelay[];
 }
 
 /* ------------------------------------------------------------------------------------------------
@@ -350,6 +352,8 @@ export interface CapacityQuery {
   carrier?: string;
   at: number;
   timezone?: string;
+  /** Lines (preparation) or parcels (carrier) to fit in the day. */
+  needed: number;
 }
 /** remaining: capacity left that day (Infinity = unlimited); until: end of that day (start of the next one). */
 export type CapacityLookup = (q: CapacityQuery) => { remaining: number; until: number; capacity?: number } | undefined;
@@ -363,7 +367,12 @@ export interface CapacityDelay {
   day: number;
   remaining: number;
   needed: number;
+  /** Transfer to the consolidation point. */
+  transfer?: boolean;
 }
+
+/** Days looked ahead for a day with capacity left. */
+export const MAX_CAPACITY_DAYS = 90;
 
 /** Stock request of a delivery method (GET /stock_export request_name). */
 export const DEFAULT_STOCK_REQUEST = 'detailed';
@@ -539,28 +548,38 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
    * Preparation then carrier legs from a moment, postponed to the next day while the preparation capacity of the stock
    * location (order lines) or the loading capacity of the first carrier there (parcels) is reached that day.
    */
-  const capacityTimed = (routes: DeliveryRoute[], ep: Endpoint | undefined, nLines: number, start: number, track: 'min' | 'max', delays: CapacityDelay[]) => {
+  const capacityTimed = (
+    routes: DeliveryRoute[],
+    ep: Endpoint | undefined,
+    nLines: number,
+    start: number,
+    track: 'min' | 'max',
+    delays: CapacityDelay[],
+    opts: { prepare?: boolean; transfer?: boolean } = {},
+  ) => {
     const cap = input.capacity;
     const tz = ep?.timezone;
+    const transfer = opts.transfer || undefined;
     let t = start;
-    for (let day = 0; day < 21; day++) {
-      const prep = runOperations('before_shipping', config, ep, t, timing);
+    // day after day until a day with capacity left (bounded to avoid looping on a calendar always full)
+    for (let day = 0; day < MAX_CAPACITY_DAYS; day++) {
+      const prep = opts.prepare === false ? { end: t, steps: [] as OperationTiming[] } : runOperations('before_shipping', config, ep, t, timing);
       if (!prep) return undefined;
-      const pc = cap && ep ? cap({ kind: 'preparation', endpoint: ep.id, at: prep.end, timezone: tz }) : undefined;
+      const pc = cap && ep ? cap({ kind: 'preparation', endpoint: ep.id, at: prep.end, timezone: tz, needed: nLines }) : undefined;
       if (pc && pc.remaining < nLines && pc.until > t) {
-        delays.push({ kind: 'preparation', endpoint: ep!.id, day: pc.until - 86400, remaining: Math.max(0, pc.remaining), needed: nLines });
+        delays.push({ kind: 'preparation', endpoint: ep!.id, day: pc.until - 86400, remaining: Math.max(0, pc.remaining), needed: nLines, transfer });
         t = pc.until;
         continue;
       }
       let legStart = prep.end;
-      for (let d = 0; d < 21; d++) {
+      for (let d = 0; d < MAX_CAPACITY_DAYS; d++) {
         const legs = timeLegs(routes, legStart, track, timing);
         if (!legs) return undefined;
         const carrier = routes[0]?.carrier.name;
         const pickupAt = legs[0]?.pickup?.end ?? legs[0]?.departure;
-        const cc = cap && ep && carrier && pickupAt !== undefined ? cap({ kind: 'carrier', endpoint: ep.id, carrier, at: pickupAt, timezone: tz }) : undefined;
+        const cc = cap && ep && carrier && pickupAt !== undefined ? cap({ kind: 'carrier', endpoint: ep.id, carrier, at: pickupAt, timezone: tz, needed: 1 }) : undefined;
         if (cc && cc.remaining < 1 && cc.until > legStart) {
-          delays.push({ kind: 'carrier', endpoint: ep!.id, carrier, day: cc.until - 86400, remaining: Math.max(0, cc.remaining), needed: 1 });
+          delays.push({ kind: 'carrier', endpoint: ep!.id, carrier, day: cc.until - 86400, remaining: Math.max(0, cc.remaining), needed: 1, transfer });
           legStart = cc.until;
           continue;
         }
@@ -807,6 +826,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         shipment_number: 1,
         delivery_routes: [...transferRoutes, ...finalRoutes],
         consolidation: c,
+        capacity_delays: c.capacity_delays?.length ? c.capacity_delays : undefined,
         future_stock: (() => {
           const f = [...readyAt(c.point, c.local).future, ...c.transfers.flatMap((tr) => readyAt(tr.from, [{ item_id: tr.item_id, qty: tr.qty }]).future)];
           return f.length ? f : undefined;
@@ -855,10 +875,11 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
             if (chainRoutes.some((r) => !selectVariant(r, [l], items, orderPrice).variant)) continue;
             for (const from of zoneEndpoints(ctx.zones.get(chain.originZoneId ?? ''), ctx).slice(0, 25)) {
               if (from.id === point.id || !availability(stock, from.id, l.item_id, l.qty)) continue;
-              const prep = runOperations('before_shipping', config!, ctx.endpoints.get(from.id), readyAt(from.id, [l]).slow, timing);
-              if (!prep) continue;
-              const legs = timeLegs(chainRoutes, prep.end, 'max', timing);
-              if (!legs) continue;
+              // preparation and pickup at the origin of the transfer, within the capacities of the day
+              const trDelays: CapacityDelay[] = [];
+              const timed = capacityTimed(chainRoutes, ctx.endpoints.get(from.id), 1, readyAt(from.id, [l]).slow, 'max', trDelays, { transfer: true });
+              if (!timed) continue;
+              const legs = timed.legs;
               const arrival = legs[legs.length - 1].delivered;
               if (!best || arrival < best.arrival) {
                 const tmvs = chainRoutes.map((r) => selectVariant(r, [l], items, orderPrice).variant?.metric_values ?? r.metric_values ?? {});
@@ -866,7 +887,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
                 const carbon = tmvs.some((mv) => mv.carbon_footprint !== undefined)
                   ? tmvs.reduce((sum, mv) => sum + (mv.carbon_footprint ?? 0), 0)
                   : undefined;
-                best = { item_id: l.item_id, qty: l.qty, from: from.id, schema: chain, timeline: legs, arrival, cost, carbon };
+                best = { item_id: l.item_id, qty: l.qty, from: from.id, schema: chain, timeline: legs, arrival, cost, carbon, capacity_delays: trDelays };
               }
             }
           }
@@ -881,9 +902,13 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         if (!prepLocal) continue;
         const ready = Math.max(prepLocal.end, ...transfers.map((tr) => tr.arrival));
         const routes = a.schema.legs.map((x) => x.route);
-        const fast = timeLegs(routes, ready, 'min', timing);
-        const slow = timeLegs(routes, ready, 'max', timing);
-        if (!fast || !slow) continue;
+        // the grouped parcel (every line) within the preparation capacity of the point and its carrier capacity
+        const finalDelays: CapacityDelay[] = [];
+        const fastT = capacityTimed(routes, pointEp, lines.length, ready, 'min', [], { prepare: false });
+        const slowT = capacityTimed(routes, pointEp, lines.length, ready, 'max', finalDelays, { prepare: false });
+        if (!fastT || !slowT) continue;
+        const fast = fastT.legs;
+        const slow = slowT.legs;
         const afterFast = runOperations('after_shipping', config!, destEndpoint, fast[fast.length - 1].delivered, timing);
         const afterSlow = runOperations('after_shipping', config!, destEndpoint, slow[slow.length - 1].delivered, timing);
         if (!afterFast || !afterSlow) continue;
@@ -903,6 +928,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
           eta_end: afterSlow.end,
           cost: finalCost + transfers.reduce((sum, tr) => sum + (tr.cost ?? 0), 0),
           carbon,
+          capacity_delays: [...transfers.flatMap((tr) => tr.capacity_delays ?? []), ...finalDelays],
           shipping_fees: fees,
         });
       }

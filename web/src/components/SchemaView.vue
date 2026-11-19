@@ -275,7 +275,7 @@ function chainLegs(a: SchemaAnalysis) {
                 .replace('{carrier}', d.carrier ?? '')
                 .replace('{day}', formatDay(d.day + 43200))
                 .replace('{remaining}', String(d.remaining))
-                .replace('{needed}', String(d.needed)),
+                .replace('{needed}', String(d.needed)) + (d.transfer ? ` (${t('capacityTransfer')})` : ''),
             )
             .join(' · ')
         "

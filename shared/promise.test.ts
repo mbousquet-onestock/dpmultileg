@@ -183,6 +183,22 @@ describe('consolidation', () => {
     expect(o.delivery_routes!.filter((r) => r.transfer).length).toBeGreaterThan(0);
   });
 
+  it('applies the capacities to the transfer', () => {
+    const base = run('HD_standard', both, paris, { consolidate: true });
+    const from = base.consolidation!.transfers[0].from;
+    let first = 0;
+    const o = run('HD_standard', both, paris, {
+      consolidate: true,
+      capacity: (q) => {
+        if (q.kind !== 'preparation' || q.endpoint !== from) return undefined;
+        if (!first) first = q.at - (q.at % 86400);
+        return { remaining: q.at < first + 2 * 86400 ? 0 : 5, until: q.at - (q.at % 86400) + 86400 };
+      },
+    });
+    expect(o.capacity_delays?.some((d) => d.transfer && d.endpoint === from)).toBe(true);
+    expect(o.consolidation!.transfers[0].arrival).toBeGreaterThan(base.consolidation!.transfers[0].arrival);
+  });
+
   it('respects the delivery method: same day delivery (1 shipment allowed) becomes complete', () => {
     expect(run('SDD', both).status).toBe('partial');
     const o = run('SDD', both, paris, { consolidate: true });
@@ -286,6 +302,20 @@ describe('capacities', () => {
     });
     expect(o.capacity_delays?.some((d) => d.kind === 'carrier')).toBe(true);
     expect(o.eta_end!).toBeGreaterThan(base.eta_end!);
+  });
+
+  it('looks day after day until a day with capacity left', () => {
+    let first = 0;
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, {
+      capacity: (q) => {
+        if (q.kind !== 'preparation') return undefined;
+        if (!first) first = dayOf(q.at);
+        return { remaining: dayOf(q.at) < first + 10 * DAY ? 0 : 3, until: dayOf(q.at) + DAY };
+      },
+    });
+    expect(o.status).not.toBe('none');
+    expect(o.capacity_delays!.filter((d) => d.kind === 'preparation').length).toBeGreaterThanOrEqual(10);
+    expect(o.eta_start!).toBeGreaterThan(first + 10 * DAY);
   });
 
   it('ignores unknown capacities', () => {
