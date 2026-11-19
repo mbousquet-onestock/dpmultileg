@@ -90,8 +90,21 @@ export function zoneContains(
 }
 
 /** Endpoints (stock locations) belonging to a zone. */
+const zoneEndpointsMemo = new WeakMap<ZoneContext, Map<Zone, Endpoint[]>>();
+
 export function zoneEndpoints(zone: Zone | undefined, ctx: ZoneContext): Endpoint[] {
   if (!zone) return [];
+  // memoized per zone context (zones / endpoints do not change during a computation)
+  let memo = zoneEndpointsMemo.get(ctx);
+  if (!memo) zoneEndpointsMemo.set(ctx, (memo = new Map()));
+  const hit = memo.get(zone);
+  if (hit) return hit;
+  const result = zoneEndpointsUncached(zone, ctx);
+  memo.set(zone, result);
+  return result;
+}
+
+function zoneEndpointsUncached(zone: Zone, ctx: ZoneContext): Endpoint[] {
   const result: Endpoint[] = [];
   for (const ep of ctx.endpoints.values()) {
     if (zoneContains(zone, { endpoint_id: ep.id }, ctx)) result.push(ep);

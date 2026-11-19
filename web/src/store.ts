@@ -1,7 +1,8 @@
+import type { ExecutionTime, Timetable } from '@shared/timetables';
 import { deliveryMethods, type StockLine, type ZoneContext } from '@shared/logistics';
 import { candidateEndpoints, computePromise, stockRequestOf, type CapacityLookup, type CapacityQuery, type LocalPromiseOption } from '@shared/promise';
 import type { DeliveryConfig, Destination, Endpoint, Item } from '@shared/types';
-import { computed, reactive, watch } from 'vue';
+import { computed, markRaw, reactive, toRaw, watch } from 'vue';
 import { api, type Referential } from './api';
 import { lang } from './i18n';
 
@@ -114,13 +115,28 @@ export function addLine(item: Item, qty = 1) {
 }
 
 export async function loadReferential(refresh = false) {
-  state.referential = await api.referential(refresh);
+  // markRaw: large data read by the computation, never mutated (replaced as a whole): no reactive proxies.
+  state.referential = markRaw(await api.referential(refresh));
   if (!state.salesChannel && salesChannels.value.length) state.salesChannel = salesChannels.value[0].id;
 }
 
 export async function loadEndpoints(query = '') {
   const { endpoints: found } = await api.searchEndpoints(query);
-  state.extraEndpoints = [...state.extraEndpoints.filter((e) => !found.some((f) => f.id === e.id)), ...found];
+  state.extraEndpoints = [...state.extraEndpoints.filter((e) => !found.some((f) => f.id === e.id)), ...found.map((e) => markRaw(e))];
+}
+
+/** Maps of the referential, built once per load (the computation memoizes calendars per map). */
+const refMapsMemo = new WeakMap<Referential, { timetablesMap: Map<string, Timetable>; executionTimesMap: Map<string, ExecutionTime> }>();
+function refMaps(ref: Referential) {
+  let m = refMapsMemo.get(ref);
+  if (!m) {
+    m = {
+      timetablesMap: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
+      executionTimesMap: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
+    };
+    refMapsMemo.set(ref, m);
+  }
+  return m;
 }
 
 export async function runTest() {
@@ -212,19 +228,22 @@ export async function runTest() {
     let capCalls = 0;
     let capQueries = 0;
     let rounds = 0;
+    // built once: the computation memoizes per map (calendars of the routes...) across the capacity rounds
+    const itemsMap = new Map(state.lines.map((l) => [l.item.id, toRaw(l.item)]));
+    const { timetablesMap, executionTimesMap } = refMaps(ref);
     const compute = () => {
       const c0 = performance.now();
       const r = computePromise({
         ...common,
         lines,
         from,
-        items: new Map(state.lines.map((l) => [l.item.id, l.item])),
+        items: itemsMap,
         stock,
         stocks,
         price: state.price.enabled ? state.price.value : undefined,
-        timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
+        timetables: timetablesMap,
         events: ref.scheduled_events ?? [],
-        executionTimes: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
+        executionTimes: executionTimesMap,
         settings: ref.settings,
         consolidate: state.consolidation,
         capacity,
@@ -285,7 +304,7 @@ export async function runTest() {
       total_ms: Math.round(performance.now() - t0),
     };
     console.info('[dpmultileg] promise timings', state.stats);
-    state.results = options.map((option) => ({ option, config: option.config }));
+    state.results = options.map((option) => markRaw({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
     state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;
   } catch (e) {

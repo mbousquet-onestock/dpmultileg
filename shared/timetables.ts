@@ -96,7 +96,19 @@ function roleFromField(field: string): TimetableRole | undefined {
  * delivery_timetable_id, opening_timetable_id, transit_timetable_id...). The role comes from the timetable type,
  * or from the field name when the type is unknown.
  */
+const routeTimetablesMemo = new WeakMap<Map<string, Timetable>, WeakMap<DeliveryRoute, Partial<Record<TimetableRole, Timetable>>>>();
+
 export function routeTimetables(route: DeliveryRoute, timetables: Map<string, Timetable>): Partial<Record<TimetableRole, Timetable>> {
+  let memo = routeTimetablesMemo.get(timetables);
+  if (!memo) routeTimetablesMemo.set(timetables, (memo = new WeakMap()));
+  const hit = memo.get(route);
+  if (hit) return hit;
+  const result = routeTimetablesUncached(route, timetables);
+  memo.set(route, result);
+  return result;
+}
+
+function routeTimetablesUncached(route: DeliveryRoute, timetables: Map<string, Timetable>): Partial<Record<TimetableRole, Timetable>> {
   const result: Partial<Record<TimetableRole, Timetable>> = {};
   // 1. timetables declaring the route in their `routes` (GET /timetables/{id}, fields: routes)
   for (const tt of timetables.values()) {
@@ -124,8 +136,24 @@ export function routeTimetables(route: DeliveryRoute, timetables: Map<string, Ti
 const formatters = new Map<string, Intl.DateTimeFormat>();
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+const weekSecondsMemo = new Map<string, number>();
+
 /** Seconds elapsed since Monday 00:00 (local time of the time zone) at the given instant. */
 export function secondsInWeek(ts: number, timeZone = 'UTC'): number {
+  // Offsets change on whole UTC hours: the value at the start of the UTC hour is computed once per time zone / hour.
+  const hourStart = Math.floor(ts / 3600) * 3600;
+  const key = `${timeZone}|${hourStart}`;
+  let base = weekSecondsMemo.get(key);
+  if (base === undefined) {
+    base = secondsInWeekUncached(hourStart, timeZone);
+    if (weekSecondsMemo.size > 20000) weekSecondsMemo.clear();
+    weekSecondsMemo.set(key, base);
+  }
+  const v = base + (ts - hourStart);
+  return v >= WEEK ? v - WEEK : v;
+}
+
+function secondsInWeekUncached(ts: number, timeZone: string): number {
   let f = formatters.get(timeZone);
   if (!f) {
     try {
@@ -148,6 +176,9 @@ export interface Interval {
   end: number;
 }
 
+const mergedMemo = new WeakMap<Timespan[], Map<string, Interval[]>>();
+const spansMemo = new WeakMap<Timetable, Timespan[]>();
+
 /** Open intervals of a timetable, minus the closures, over a horizon. No timetable = always open. */
 export class Calendar {
   private readonly spans: Timespan[];
@@ -158,7 +189,12 @@ export class Calendar {
     private readonly closures: Interval[] = [],
     private readonly horizonWeeks = 8,
   ) {
-    this.spans = (timetable?.hours?.timespans ?? []).filter((s) => s.options?.open !== false && s.end > s.start);
+    let spans = timetable ? spansMemo.get(timetable) : undefined;
+    if (!spans) {
+      spans = (timetable?.hours?.timespans ?? []).filter((s) => s.options?.open !== false && s.end > s.start);
+      if (timetable) spansMemo.set(timetable, spans);
+    }
+    this.spans = spans;
     this.tz = timetable?.hours?.timezone ?? 'UTC';
   }
 
@@ -173,16 +209,25 @@ export class Calendar {
     if (!this.spans.length) raw = [{ start: from, end: from + this.horizonWeeks * WEEK }];
     else {
       const weekStart = from - secondsInWeek(from, this.tz);
-      raw = [];
-      for (let w = -1; w <= this.horizonWeeks; w++)
-        for (const s of this.spans) raw.push({ start: weekStart + w * WEEK + s.start, end: weekStart + w * WEEK + s.end });
-      raw.sort((a, b) => a.start - b.start);
-      // Merge contiguous spans (OneStock timespans end at :59 or :01, e.g. 0 -> 604799 for a full week).
-      const merged: Interval[] = [];
-      for (const iv of raw) {
-        const last = merged[merged.length - 1];
-        if (last && iv.start <= last.end + 1) last.end = Math.max(last.end, iv.end);
-        else merged.push({ ...iv });
+      // open intervals of the timetable over the horizon, computed once per timetable / week
+      const key = `${weekStart}|${this.horizonWeeks}`;
+      let byWeek = mergedMemo.get(this.spans);
+      if (!byWeek) mergedMemo.set(this.spans, (byWeek = new Map()));
+      let merged = byWeek.get(key);
+      if (!merged) {
+        const all: Interval[] = [];
+        for (let w = -1; w <= this.horizonWeeks; w++)
+          for (const s of this.spans) all.push({ start: weekStart + w * WEEK + s.start, end: weekStart + w * WEEK + s.end });
+        all.sort((a, b) => a.start - b.start);
+        // Merge contiguous spans (OneStock timespans end at :59 or :01, e.g. 0 -> 604799 for a full week).
+        merged = [];
+        for (const iv of all) {
+          const last = merged[merged.length - 1];
+          if (last && iv.start <= last.end + 1) last.end = Math.max(last.end, iv.end);
+          else merged.push({ ...iv });
+        }
+        if (byWeek.size > 50) byWeek.clear();
+        byWeek.set(key, merged);
       }
       raw = merged;
     }

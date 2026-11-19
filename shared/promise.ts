@@ -340,10 +340,27 @@ export function constraintFailure(route: DeliveryRoute, lines: LineItem[], items
 
 const AVAILABLE = new Set(['on_hand', 'available', 'physical', 'stock', '']);
 
+/** Stock lines indexed by location / item (built once per stock list). */
+const stockIndexes = new WeakMap<StockLine[], Map<string, StockLine[]>>();
+function stockLinesOf(stock: StockLine[], endpoint: string, item: string): StockLine[] {
+  let index = stockIndexes.get(stock);
+  if (!index) {
+    index = new Map();
+    for (const s of stock) {
+      const k = `${s.endpoint_id}\u0000${s.item_id}`;
+      const list = index.get(k);
+      if (list) list.push(s);
+      else index.set(k, [s]);
+    }
+    stockIndexes.set(stock, index);
+  }
+  return index.get(`${endpoint}\u0000${item}`) ?? [];
+}
+
 function stockOf(stock: StockLine[], endpoint: string, item: string): number {
-  return stock
-    .filter((s) => s.endpoint_id === endpoint && s.item_id === item && s.eta_end === undefined && AVAILABLE.has(s.type ?? ''))
-    .reduce((n, s) => n + s.quantity, 0);
+  let n = 0;
+  for (const s of stockLinesOf(stock, endpoint, item)) if (s.eta_end === undefined && AVAILABLE.has(s.type ?? '')) n += s.quantity;
+  return n;
 }
 
 export interface CapacityQuery {
@@ -403,8 +420,8 @@ export function availability(
 ): { quantity: number; start: number; end: number; future: FutureStockUse[] } | undefined {
   let acc = stockOf(stock, endpoint, item);
   if (acc >= qty) return { quantity: acc, start: 0, end: 0, future: [] };
-  const incoming = stock
-    .filter((s) => s.endpoint_id === endpoint && s.item_id === item && s.eta_end !== undefined && s.quantity > 0)
+  const incoming = stockLinesOf(stock, endpoint, item)
+    .filter((s) => s.eta_end !== undefined && s.quantity > 0)
     .sort((a, b) => a.eta_end! - b.eta_end! || (a.eta_start ?? 0) - (b.eta_start ?? 0));
   const future: FutureStockUse[] = [];
   for (const f of incoming) {
