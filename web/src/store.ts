@@ -1,5 +1,5 @@
 import { deliveryMethods, type StockLine, type ZoneContext } from '@shared/logistics';
-import { candidateEndpoints, computePromise, stockRequestOf, type LocalPromiseOption } from '@shared/promise';
+import { candidateEndpoints, computePromise, stockRequestOf, type CapacityLookup, type CapacityQuery, type LocalPromiseOption } from '@shared/promise';
 import type { DeliveryConfig, Destination, Endpoint, Item } from '@shared/types';
 import { computed, reactive, watch } from 'vue';
 import { api, type Referential } from './api';
@@ -174,20 +174,61 @@ export async function runTest() {
     );
     const stock = Object.values(stocks)[0] ?? null;
 
-    const options = computePromise({
-      ...common,
-      lines,
-      from,
-      items: new Map(state.lines.map((l) => [l.item.id, l.item])),
-      stock,
-      stocks,
-      price: state.price.enabled ? state.price.value : undefined,
-      timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
-      events: ref.scheduled_events ?? [],
-      executionTimes: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
-      settings: ref.settings,
-      consolidate: state.consolidation,
-    });
+    // Capacities (GET /capacities) are read for the stock locations / days the computation actually considers:
+    // compute, fetch the capMissing days, compute again (a full day postpones to the next one, which may be capMissing).
+    const capDays = new Map<string, { date: number; until: number; remaining: number; capacity?: number }[]>();
+    const capFailed = new Set<string>();
+    const capKey = (q: CapacityQuery) => (q.kind === 'carrier' ? `${q.endpoint}|${q.carrier}` : q.endpoint);
+    let capMissing = new Map<string, CapacityQuery>();
+    const capacity: CapacityLookup = (q) => {
+      const key = capKey(q);
+      if (capFailed.has(key)) return undefined;
+      const hit = capDays.get(key)?.find((d) => d.date <= q.at && q.at < d.until);
+      if (hit) return hit;
+      const day = new Intl.DateTimeFormat('en-CA', { timeZone: q.timezone || 'Europe/Paris' }).format(new Date(q.at * 1000));
+      capMissing.set(`${key}|${day}`, q);
+      return undefined;
+    };
+    const compute = () =>
+      computePromise({
+        ...common,
+        lines,
+        from,
+        items: new Map(state.lines.map((l) => [l.item.id, l.item])),
+        stock,
+        stocks,
+        price: state.price.enabled ? state.price.value : undefined,
+        timetables: new Map((ref.timetables ?? []).map((tt) => [tt.id, tt])),
+        events: ref.scheduled_events ?? [],
+        executionTimes: new Map((ref.execution_times ?? []).map((e) => [e.id, e])),
+        settings: ref.settings,
+        consolidate: state.consolidation,
+        capacity,
+      });
+    let computed = compute();
+    for (let round = 0; round < 6 && capMissing.size; round++) {
+      const queries = [...capMissing.values()].slice(0, 200);
+      capMissing = new Map();
+      try {
+        const { results } = await api.capacities(queries.map((q) => ({ endpoint: q.endpoint, carrier: q.carrier, at: q.at, timezone: q.timezone })));
+        queries.forEach((q, i) => {
+          const r = results[i];
+          const key = capKey(q);
+          if (!r?.ok) return capFailed.add(key);
+          const date = r.date ?? q.at - (q.at % 86400);
+          const list = capDays.get(key) ?? [];
+          if (!list.some((d) => d.date === date))
+            list.push({ date, until: date + 86400, remaining: r.remaining ?? Infinity, capacity: r.capacity ?? undefined });
+          capDays.set(key, list);
+        });
+      } catch (e) {
+        console.warn('[dpmultileg] capacities unavailable', e);
+        for (const q of queries) capFailed.add(capKey(q));
+      }
+      computed = compute();
+    }
+
+    const options = computed;
     state.results = options.map((option) => ({ option, config: option.config }));
     const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
     state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;

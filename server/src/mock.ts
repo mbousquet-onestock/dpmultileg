@@ -420,6 +420,14 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
         stocks: eps.flatMap((e) => items.filter((i) => (stock[e]?.[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: stock[e][i], type: 'on_hand' }))),
       };
     }
+    case '/capacities': {
+      // Day start (UTC approximation); the Paris store prepares 3 order lines a day, 2 already consumed.
+      const at = Number(body.at_date) || Math.floor(Date.now() / 1000);
+      const date = at - (at % 86400);
+      const links = (body.links as { type: string; entity_id: string }[] | undefined) ?? [];
+      const store = links.some((l) => l.type === 'endpoint' && l.entity_id === 'ST_PARIS') && links.length === 1;
+      return { capacity: { date, links, capacities: store ? 3 : null, defaults: '+Inf', consumed: store ? 2 : 0 } };
+    }
     case '/configurations':
       return { stock: { types: ['on_hand', 'asn'], on_hand: 'on_hand' } };
     case '/stock_export': {

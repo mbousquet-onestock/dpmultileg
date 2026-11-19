@@ -16,6 +16,11 @@ Une extension UI OneStock (`bo.page`) qui permet de :
      sont ignorés. Le stock futur n'est
      utilisé qu'à défaut de stock disponible : la préparation démarre à son arrivée (au plus tôt `eta_start`, au plus
      tard `eta_end`), ce qui décale la date de livraison estimée ;
+   - `GET /capacities` : capacité de préparation d'un lieu de stock en lignes de commande (`links: [endpoint]`) et
+     capacité de chargement d'un transporteur en colis à ce lieu (`links: [endpoint, carrier]`, carrier = `name` des
+     `carriers` de la delivery_config), pour le jour contenant `at_date`. Restant = (`capacities` sinon `defaults`) −
+     `consumed`. Jour plein : la préparation (ou l'enlèvement) est reportée au jour suivant. Seuls les lieux / jours
+     réellement envisagés par le calcul sont interrogés ; capacité inconnue ou en erreur = illimitée.
    - les grilles de coûts des routes, évaluées sur les caractéristiques des articles (poids, quantité) et le prix de la commande ;
 4. **voir le schéma logistique** de chaque option : la ou les routes sélectionnées selon les priorités du mode (par exemple la plus rapide parmi celles qui ont le stock), et pour chaque autre schéma la raison pour laquelle il n'est pas retenu (pas de stock, restriction, contrainte colis, critère de priorité).
 

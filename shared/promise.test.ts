@@ -259,3 +259,39 @@ describe('future stock (ASN)', () => {
     expect(o.eta_end!).toBeLessThan(asn.eta_end);
   });
 });
+
+describe('capacities', () => {
+  const DAY = 86400;
+  const dayOf = (t: number) => t - (t % DAY);
+  it('postpones the preparation when the stock location capacity of the day is reached', () => {
+    const base = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
+    const shipFrom = base.delivery_routes![0].origin_endpoint_id!;
+    const firstDay = dayOf(from);
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, {
+      capacity: (q) => (q.kind === 'preparation' && q.endpoint === shipFrom ? { remaining: dayOf(q.at) <= firstDay + DAY ? 0 : 10, until: dayOf(q.at) + DAY } : undefined),
+    });
+    expect(o.capacity_delays?.[0]).toMatchObject({ kind: 'preparation', endpoint: shipFrom, remaining: 0, needed: 1 });
+    expect(o.eta_end!).toBeGreaterThan(base.eta_end!);
+  });
+
+  it('postpones the pickup when the carrier is full at the stock location', () => {
+    const base = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
+    let full = 0;
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, {
+      capacity: (q) => {
+        if (q.kind !== 'carrier') return undefined;
+        if (full === 0) full = dayOf(q.at);
+        return { remaining: dayOf(q.at) === full ? 0 : 5, until: dayOf(q.at) + DAY };
+      },
+    });
+    expect(o.capacity_delays?.some((d) => d.kind === 'carrier')).toBe(true);
+    expect(o.eta_end!).toBeGreaterThan(base.eta_end!);
+  });
+
+  it('ignores unknown capacities', () => {
+    const base = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { capacity: () => undefined });
+    expect(o.eta_end).toBe(base.eta_end);
+    expect(o.capacity_delays).toBeUndefined();
+  });
+});

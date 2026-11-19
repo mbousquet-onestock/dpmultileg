@@ -158,7 +158,7 @@ export function apiRouter(): Router {
 
   /* ---------------------------------------------------------------- OneStock data (authenticated) */
 
-  r.use(['/referential', '/endpoints', '/items', '/delivery_promises', '/stocks'], (req, res, next) => {
+  r.use(['/referential', '/endpoints', '/items', '/delivery_promises', '/stocks', '/capacities'], (req, res, next) => {
     void requireSession(req, res, next);
   });
 
@@ -287,6 +287,51 @@ export function apiRouter(): Router {
         stocks.push(...collectStockLines(result).filter((l) => l.eta_end === undefined));
       }
       res.json({ stocks: applyStockTypes(stocks, types), request_name: requestName, source, stock_types: types, stock_export_error: exportError });
+    }),
+  );
+
+  /**
+   * Capacities of the day containing `at` (GET /capacities): preparation capacity of a stock location (order lines,
+   * links [endpoint]) or loading capacity of a carrier there (parcels, links [endpoint, carrier]).
+   */
+  r.post(
+    '/capacities',
+    wrap(async (req, res) => {
+      const t = target(req.session!);
+      type Q = { endpoint?: unknown; carrier?: unknown; at?: unknown; timezone?: unknown };
+      const queries = (Array.isArray(req.body?.queries) ? (req.body.queries as Q[]) : []).slice(0, 200);
+      const results = await Promise.all(
+        queries.map(async (q, i) => {
+          await new Promise((ok) => setTimeout(ok, Math.floor(i / 10) * 50)); // spread the calls
+          const endpoint = str(q.endpoint);
+          const at = Number(q.at);
+          if (!endpoint || !Number.isFinite(at)) return { ok: false, error: 'invalid query' };
+          const links: { type: string; entity_id: string }[] = [{ type: 'endpoint', entity_id: endpoint }];
+          if (str(q.carrier)) links.push({ type: 'carrier', entity_id: str(q.carrier)! });
+          try {
+            const r = (await callOnestock(t, 'GET', '/capacities', {
+              links,
+              at_date: String(Math.floor(at)),
+              locale: 'fr_FR',
+              location: str(q.timezone) ?? 'Europe/Paris',
+            })) as { capacity?: { date?: number; capacities?: unknown; defaults?: unknown; consumed?: unknown } };
+            const c = r?.capacity ?? {};
+            const num = (v: unknown) => (v === null || v === undefined || v === '' ? undefined : /inf/i.test(String(v)) ? Infinity : Number(v));
+            const capacity = num(c.capacities) ?? num(c.defaults) ?? Infinity;
+            const consumed = num(c.consumed) ?? 0;
+            return {
+              ok: true,
+              date: typeof c.date === 'number' ? c.date : undefined,
+              capacity: Number.isFinite(capacity) ? capacity : null,
+              consumed,
+              remaining: Number.isFinite(capacity) ? capacity - consumed : null,
+            };
+          } catch (e) {
+            return { ok: false, error: e instanceof Error ? e.message : String(e) };
+          }
+        }),
+      );
+      res.json({ results });
     }),
   );
 

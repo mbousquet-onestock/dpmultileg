@@ -8,7 +8,7 @@ import { criterionKind, formatHours, prioritiesFor, settingsPriorities, type Log
 import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
 import type { OperationTiming } from '@shared/timetables';
 import { computed, ref } from 'vue';
-import { formatDate, formatMoney, formatRange, t } from '../i18n';
+import { formatDate, formatDay, formatMoney, formatRange, t } from '../i18n';
 import { currency, destination, display, endpoints, itemLabel, selectedSchemas, state, zoneCtx } from '../store';
 import SchemaChain from './SchemaChain.vue';
 
@@ -263,6 +263,23 @@ function chainLegs(a: SchemaAnalysis) {
         </template>
       </OsAlert>
       <OsAlert v-if="option.stock_unverified" type="warning" :subtitle="t('stockUnverified')" />
+      <OsAlert
+        v-if="option.capacity_delays?.length"
+        type="info"
+        :title="t('capacityTitle')"
+        :subtitle="
+          option.capacity_delays
+            .map((d) =>
+              t(d.kind === 'carrier' ? 'capacityCarrier' : 'capacityPreparation')
+                .replace('{where}', endpointName(d.endpoint))
+                .replace('{carrier}', d.carrier ?? '')
+                .replace('{day}', formatDay(d.day + 43200))
+                .replace('{remaining}', String(d.remaining))
+                .replace('{needed}', String(d.needed)),
+            )
+            .join(' · ')
+        "
+      />
       <OsAlert
         v-if="option.future_stock?.length"
         type="info"

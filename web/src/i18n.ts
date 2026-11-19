@@ -223,6 +223,9 @@ const fr = {
   localPickup: 'Servie par le stock du magasin de retrait, sans transport.',
   stockUnverified: "Le stock n'a pas pu être lu (GET /stocks) : la disponibilité n'est pas vérifiée.",
   futureStockTitle: 'Promesse sur stock futur',
+  capacityTitle: 'Capacité atteinte : date reportée',
+  capacityPreparation: 'Préparation à {where} le {day} : {remaining} ligne(s) restante(s) pour {needed} à préparer',
+  capacityCarrier: 'Enlèvement {carrier} à {where} le {day} : capacité en colis atteinte',
   futureStockLine: '{qty} × {item} attendus à {where} ({ref}) : {range}',
   localComputation: "Promesse calculée par l'extension à partir des modes de livraison, routes, zones, priorités et du stock (sans /delivery_promises). Date = maintenant, puis les opérations du mode sur leur calendrier d'exécution (execution_time_timetable, sinon horaires du lieu de stock), puis pour chaque route : prochain créneau d'enlèvement (cutoff transporteur), transit sur les jours de roulage, prochain créneau de livraison (fin de créneau).",
   schemaReturned: 'Renvoyé par OneStock',
@@ -489,6 +492,9 @@ const en: Dict = {
   localPickup: 'Served by the stock of the collection store, without transport.',
   stockUnverified: 'Stock could not be read (GET /stocks): availability is not verified.',
   futureStockTitle: 'Promise on future stock',
+  capacityTitle: 'Capacity reached: date postponed',
+  capacityPreparation: 'Preparation at {where} on {day}: {remaining} line(s) left for {needed} to prepare',
+  capacityCarrier: '{carrier} pickup at {where} on {day}: parcel capacity reached',
   futureStockLine: '{qty} × {item} expected at {where} ({ref}): {range}',
   localComputation: 'Promise computed by the extension from the delivery methods, routes, zones, priorities and stock (no /delivery_promises). Date = now, then the method operations on their execution timetable (execution_time_timetable, else the stock location opening hours), then for each route: next pickup slot (carrier cutoff), transit on running days, next delivery slot (end of slot).',
   schemaReturned: 'Returned by OneStock',
@@ -548,6 +554,16 @@ export function setLocale(l?: string, loc?: string, tz?: string) {
   if (loc) locale.value = loc;
   else if (l) locale.value = l;
   if (tz) timezone.value = tz;
+}
+
+/** Day only (weekday, day, month). */
+export function formatDay(ts?: number): string {
+  if (!ts) return '';
+  try {
+    return new Intl.DateTimeFormat(locale.value, { weekday: 'short', day: '2-digit', month: 'short', timeZone: timezone.value }).format(new Date(ts * 1000));
+  } catch {
+    return new Date(ts * 1000).toDateString();
+  }
 }
 
 export function formatDate(ts?: number): string {

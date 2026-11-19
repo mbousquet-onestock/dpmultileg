@@ -40,7 +40,7 @@ import {
   type ScheduledEvent,
   type Timetable,
 } from './timetables.js';
-import type { Constraint, DeliveryConfig, DeliveryRestriction, DeliveryRoute, Destination, Item, LineItem, PromiseOption, PromiseRoute, RouteVariant, SortOrder } from './types.js';
+import type { Constraint, DeliveryConfig, DeliveryRestriction, DeliveryRoute, Destination, Endpoint, Item, LineItem, PromiseOption, PromiseRoute, RouteVariant, SortOrder } from './types.js';
 
 export interface PromiseInput {
   salesChannel: string;
@@ -70,6 +70,11 @@ export interface PromiseInput {
   settings?: Record<string, unknown>;
   /** Deliver in a minimum of parcels: group the items at an intermediate point after transfers. */
   consolidate?: boolean;
+  /**
+   * Capacities (GET /capacities): remaining capacity of the day containing `at`, undefined when not known (then
+   * unlimited). preparation = order lines a stock location can prepare; carrier = parcels a carrier can load there.
+   */
+  capacity?: CapacityLookup;
 }
 
 export type ExclusionKind = 'restriction' | 'constraint' | 'no_stock' | 'timetable';
@@ -84,6 +89,8 @@ export interface SchemaAnalysis {
   stock: { item_id: string; qty: number; endpoints: { id: string; quantity: number; available_from?: number; available_to?: number }[] }[];
   /** Future stock used by the shipping stock location retained for the timing. */
   future_stock?: FutureStockUse[];
+  /** Preparation / pickup postponed by the capacities of the stock location retained for the timing. */
+  capacity_delays?: CapacityDelay[];
   /** Why the schema can not serve some lines. */
   exclusions: { kind: ExclusionKind; item_id?: string; text: string }[];
   eta_start: number;
@@ -121,6 +128,8 @@ export interface LocalPromiseOption extends PromiseOption {
   consolidation?: Consolidation;
   /** Future stock (ASN, purchase orders...) the promise relies on. */
   future_stock?: FutureStockUse[];
+  /** Preparation / pickup postponed because a capacity is reached. */
+  capacity_delays?: CapacityDelay[];
   /** Consolidation requested but no consolidation point found: the normal allocation is kept. */
   consolidation_failed?: boolean;
 }
@@ -335,6 +344,27 @@ function stockOf(stock: StockLine[], endpoint: string, item: string): number {
     .reduce((n, s) => n + s.quantity, 0);
 }
 
+export interface CapacityQuery {
+  kind: 'preparation' | 'carrier';
+  endpoint: string;
+  carrier?: string;
+  at: number;
+  timezone?: string;
+}
+/** remaining: capacity left that day (Infinity = unlimited); until: end of that day (start of the next one). */
+export type CapacityLookup = (q: CapacityQuery) => { remaining: number; until: number; capacity?: number } | undefined;
+
+/** A preparation or a pickup postponed because the capacity of the day is reached. */
+export interface CapacityDelay {
+  kind: 'preparation' | 'carrier';
+  endpoint: string;
+  carrier?: string;
+  /** Day (start) whose capacity is reached. */
+  day: number;
+  remaining: number;
+  needed: number;
+}
+
 /** Stock request of a delivery method (GET /stock_export request_name). */
 export const DEFAULT_STOCK_REQUEST = 'detailed';
 export function stockRequestOf(config: DeliveryConfig | undefined): string {
@@ -503,6 +533,42 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     endSlow: number;
     after: OperationTiming[];
     future: FutureStockUse[];
+    delays: CapacityDelay[];
+  };
+  /**
+   * Preparation then carrier legs from a moment, postponed to the next day while the preparation capacity of the stock
+   * location (order lines) or the loading capacity of the first carrier there (parcels) is reached that day.
+   */
+  const capacityTimed = (routes: DeliveryRoute[], ep: Endpoint | undefined, nLines: number, start: number, track: 'min' | 'max', delays: CapacityDelay[]) => {
+    const cap = input.capacity;
+    const tz = ep?.timezone;
+    let t = start;
+    for (let day = 0; day < 21; day++) {
+      const prep = runOperations('before_shipping', config, ep, t, timing);
+      if (!prep) return undefined;
+      const pc = cap && ep ? cap({ kind: 'preparation', endpoint: ep.id, at: prep.end, timezone: tz }) : undefined;
+      if (pc && pc.remaining < nLines && pc.until > t) {
+        delays.push({ kind: 'preparation', endpoint: ep!.id, day: pc.until - 86400, remaining: Math.max(0, pc.remaining), needed: nLines });
+        t = pc.until;
+        continue;
+      }
+      let legStart = prep.end;
+      for (let d = 0; d < 21; d++) {
+        const legs = timeLegs(routes, legStart, track, timing);
+        if (!legs) return undefined;
+        const carrier = routes[0]?.carrier.name;
+        const pickupAt = legs[0]?.pickup?.end ?? legs[0]?.departure;
+        const cc = cap && ep && carrier && pickupAt !== undefined ? cap({ kind: 'carrier', endpoint: ep.id, carrier, at: pickupAt, timezone: tz }) : undefined;
+        if (cc && cc.remaining < 1 && cc.until > legStart) {
+          delays.push({ kind: 'carrier', endpoint: ep!.id, carrier, day: cc.until - 86400, remaining: Math.max(0, cc.remaining), needed: 1 });
+          legStart = cc.until;
+          continue;
+        }
+        return { prep, legs };
+      }
+      return undefined;
+    }
+    return undefined;
   };
   const readyAt = (endpoint: string | undefined, ls: LineItem[]) => {
     let fast = started;
@@ -522,16 +588,18 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   const timeFrom = (routes: DeliveryRoute[], endpoint: string | undefined, ls: LineItem[]): ShipTiming | undefined => {
     const ep = endpoint ? ctx.endpoints.get(endpoint) : undefined;
     const ready = readyAt(endpoint, ls);
-    const prepFast = runOperations('before_shipping', config, ep, ready.fast, timing);
-    const prepSlow = ready.slow === ready.fast ? prepFast : runOperations('before_shipping', config, ep, ready.slow, timing);
-    if (!prepFast || !prepSlow) return undefined;
-    const fast = timeLegs(routes, prepFast.end, 'min', timing);
-    const slow = timeLegs(routes, prepSlow.end, 'max', timing);
-    if (!fast || !slow) return undefined;
+    const nLines = ls.length || lines.length;
+    const delays: CapacityDelay[] = [];
+    const f = capacityTimed(routes, ep, nLines, ready.fast, 'min', []);
+    const sl = capacityTimed(routes, ep, nLines, ready.slow, 'max', delays);
+    if (!f || !sl) return undefined;
+    const prepSlow = sl.prep;
+    const fast = f.legs;
+    const slow = sl.legs;
     const afterFast = runOperations('after_shipping', config, destEndpoint, fast[fast.length - 1].delivered, timing);
     const afterSlow = runOperations('after_shipping', config, destEndpoint, slow[slow.length - 1].delivered, timing);
     if (!afterFast || !afterSlow) return undefined;
-    return { endpoint, prep: prepSlow.steps, fast, slow, endFast: afterFast.end, endSlow: afterSlow.end, after: afterSlow.steps, future: ready.future };
+    return { endpoint, prep: prepSlow.steps, fast, slow, endFast: afterFast.end, endSlow: afterSlow.end, after: afterSlow.steps, future: ready.future, delays };
   };
 
   // 3-4. exclusions and stock per schema
@@ -605,6 +673,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       operations: best ? [...(atStart?.steps ?? []), ...best.prep, ...best.after] : atStart?.steps,
       timing_endpoint: best?.endpoint,
       future_stock: best?.future.length ? best.future : undefined,
+      capacity_delays: best?.delays.length ? best.delays : undefined,
       costs,
       cost: costs.some((c) => c.cost !== undefined) ? costs.reduce((sum, c) => sum + (c.cost ?? 0), 0) : schemaCost(schema),
       carbon: costs.some((c) => c.carbon !== undefined) ? costs.reduce((sum, c) => sum + (c.carbon ?? 0), 0) : undefined,
@@ -857,10 +926,10 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   const times = shipments.map((s) => {
     const own = s.endpoint === s.a.timing_endpoint && s.lines.length === lines.length;
     const t = own ? undefined : timeFrom(s.a.schema.legs.map((l) => l.route), s.endpoint, s.lines);
-    if (!t) return { eta_start: s.a.eta_start, eta_end: s.a.eta_end, cutoff: s.a.cutoff, timeline: s.a.timeline, future: s.a.future_stock ?? [] };
+    if (!t) return { eta_start: s.a.eta_start, eta_end: s.a.eta_end, cutoff: s.a.cutoff, timeline: s.a.timeline, future: s.a.future_stock ?? [], delays: s.a.capacity_delays ?? [] };
     const pickup = t.fast[0]?.pickup;
     const opsBefore = [...(atStart?.steps ?? []), ...t.prep].reduce((h, st) => h + st.hours, 0);
-    return { eta_start: t.endFast, eta_end: t.endSlow, cutoff: pickup ? pickup.end - Math.round(opsBefore * 3600) : undefined, timeline: t.slow, future: t.future };
+    return { eta_start: t.endFast, eta_end: t.endSlow, cutoff: pickup ? pickup.end - Math.round(opsBefore * 3600) : undefined, timeline: t.slow, future: t.future, delays: t.delays };
   });
   const deliveryRoutes: PromiseRoute[] = shipments.flatMap((s, si) =>
     s.a.schema.legs.map((leg, idx) => {
@@ -880,6 +949,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   );
   const cutoffs = times.map((x) => x.cutoff).filter((c): c is number => c !== undefined);
   const futureStock = times.flatMap((x) => x.future);
+  const capacityDelays = times.flatMap((x) => x.delays);
   const cost = shipments.reduce((sum, s) => sum + (s.a.cost ?? 0), 0);
   const fees = shipments.some((s) => s.a.shipping_fees !== undefined) ? shipments.reduce((sum, s) => sum + (s.a.shipping_fees ?? 0), 0) : undefined;
   const carbon = shipments.reduce((sum, s) => sum + (s.a.carbon ?? criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
@@ -894,6 +964,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     eta_start: Math.max(...times.map((x) => x.eta_start)),
     eta_end: Math.max(...times.map((x) => x.eta_end)),
     future_stock: futureStock.length ? futureStock : undefined,
+    capacity_delays: capacityDelays.length ? capacityDelays : undefined,
     cutoff: cutoffs.length ? Math.min(...cutoffs) : undefined,
     cost: Math.round(cost * 100) / 100,
     shipping_fees: fees === undefined ? undefined : Math.round(fees * 100) / 100,

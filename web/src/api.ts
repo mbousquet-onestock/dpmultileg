@@ -148,6 +148,11 @@ export const api = {
       endpoint_ids: endpointIds,
       request_name: requestName,
     }),
+  /** Capacities of the day containing `at` (preparation of a stock location, carrier loading there). */
+  capacities: (queries: { endpoint: string; carrier?: string; at: number; timezone?: string }[]) =>
+    request<{ results: { ok: boolean; date?: number; capacity?: number | null; consumed?: number; remaining?: number | null; error?: string }[] }>('POST', '/capacities', {
+      queries,
+    }),
   /** Items by id (GET /v3/items filters.ids), with their weight and dimensions. */
   itemsByIds: (ids: string[], lang: string) => request<{ items: Item[]; total: number }>('POST', '/items/search', { ids, lang, limit: Math.min(ids.length, 50) }),
   searchEndpoints: (query: string) => request<{ endpoints: Endpoint[] }>('POST', '/endpoints/search', { query }),
