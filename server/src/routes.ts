@@ -1,6 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
-import { collectStockLines, sameCarrier, type StockLine } from '../../shared/logistics.js';
+import { applyStockTypes, collectStockLines, parseStockTypes, sameCarrier, type StockLine, type StockTypes } from '../../shared/logistics.js';
 import { normalizeTimetable, type ExecutionTime, type ScheduledEvent, type Timetable } from '../../shared/timetables.js';
 import { asList, normalizeRoutes } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
@@ -256,6 +256,13 @@ export function apiRouter(): Router {
       const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 500) : [];
       if (!itemIds.length || !endpointIds.length) return res.json({ stocks: [] });
       const wanted = new Set(endpointIds);
+      // Stock types of the site (on hand type, future types such as asn): GET /configurations, cached.
+      let types: StockTypes | undefined;
+      try {
+        types = await loadStockTypes(t);
+      } catch (e) {
+        log('warn', 'stock_types_failed', { request_id: req.requestId, ...errorFields(e) });
+      }
       // One request: GET /stock_export (detailed_ois) returns the stock and the future stock (ASN, purchase orders:
       // quantity available between eta_start and eta_end). GET /stocks only when the export has no current stock line
       // for these locations, or when it fails.
@@ -277,7 +284,7 @@ export function apiRouter(): Router {
         const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
         stocks.push(...collectStockLines(result).filter((l) => l.eta_end === undefined));
       }
-      res.json({ stocks, source, stock_export_error: exportError });
+      res.json({ stocks: applyStockTypes(stocks, types), source, stock_types: types, stock_export_error: exportError });
     }),
   );
 
@@ -648,6 +655,18 @@ async function loadReferential(t: Target, requestId?: string) {
   );
   const scheduledEvents: ScheduledEvent[] = [];
 
+  // Stock types (on hand / future stock), used when reading the stock.
+  const stockTypes = await step(
+    'stock_types',
+    'GET /configurations (stock)',
+    async () => {
+      const st = await loadStockTypes(t);
+      return st ? [st] : [];
+    },
+    (v) => (v[0] ? `on hand: ${v[0].on_hand} · types: ${v[0].types.join(', ')}` : ''),
+    true,
+  );
+
   log('info', 'referential_loaded', { request_id: requestId, steps: report.map((r) => `${r.step}:${r.ok ? r.count : 'KO'}`).join(' ') });
   return {
     delivery_configs: configs,
@@ -660,8 +679,14 @@ async function loadReferential(t: Target, requestId?: string) {
     timetables,
     scheduled_events: scheduledEvents,
     execution_times: executionTimes,
+    stock_types: stockTypes[0],
     load_report: report,
   };
+}
+
+/** Stock types of the site: GET /configurations {keys: ['stock'], scopes: {site: true}}. */
+function loadStockTypes(t: Target): Promise<StockTypes | undefined> {
+  return cached(t, 'stock_types', async () => parseStockTypes(await callOnestock(t, 'GET', '/configurations', { keys: ['stock'], scopes: { site: true } })));
 }
 
 /** Run calls by batches of 10, dropping undefined results. */

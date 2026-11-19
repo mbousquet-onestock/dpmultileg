@@ -1,4 +1,4 @@
-import type { StockLine } from '@shared/logistics';
+import type { StockLine, StockTypes } from '@shared/logistics';
 import type { ExecutionTime, ScheduledEvent, Timetable } from '@shared/timetables';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, PromiseOption, SalesChannel, SortOrder, Zone } from '@shared/types';
 
@@ -13,6 +13,7 @@ export interface Referential {
   timetables?: Timetable[];
   scheduled_events?: ScheduledEvent[];
   execution_times?: ExecutionTime[];
+  stock_types?: StockTypes;
   settings?: Record<string, unknown>;
   load_report?: { step: string; path: string; ok: boolean; count: number; ms: number; detail?: string; error?: string; optional?: boolean; partial?: boolean }[];
 }
@@ -142,7 +143,7 @@ export const api = {
   searchItems: (pattern: string, lang: string, start = 0, limit = 5) =>
     request<{ items: Item[]; total: number }>('POST', '/items/search', { pattern, lang, start, limit }),
   stocks: (itemIds: string[], endpointIds: string[]) =>
-    request<{ stocks: StockLine[]; source?: string; stock_export_error?: string }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),
+    request<{ stocks: StockLine[]; source?: string; stock_types?: StockTypes; stock_export_error?: string }>('POST', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds }),
   /** Items by id (GET /v3/items filters.ids), with their weight and dimensions. */
   itemsByIds: (ids: string[], lang: string) => request<{ items: Item[]; total: number }>('POST', '/items/search', { ids, lang, limit: Math.min(ids.length, 50) }),
   searchEndpoints: (query: string) => request<{ endpoints: Endpoint[] }>('POST', '/endpoints/search', { query }),

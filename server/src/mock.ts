@@ -420,12 +420,14 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
         stocks: eps.flatMap((e) => items.filter((i) => (stock[e]?.[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: stock[e][i], type: 'on_hand' }))),
       };
     }
+    case '/configurations':
+      return { stock: { types: ['on_hand', 'asn'], on_hand: 'on_hand' } };
     case '/stock_export': {
       const ids = ((body.aggregates as Record<string, { item_filter?: { ids?: string[] } }> | undefined)?.['*']?.item_filter?.ids ?? []) as string[];
       const now = Math.floor(Date.now() / 1000);
       return {
         stocks: [
-          ...Object.entries(stock).flatMap(([e, q]) => ids.filter((i) => (q[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: q[i], type: 'stock' }))),
+          ...Object.entries(stock).flatMap(([e, q]) => ids.filter((i) => (q[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: q[i], type: 'on_hand' }))),
           // An incoming purchase order: the watch arrives in the Toulouse warehouse in 2 to 4 days.
           ...ids
             .filter((i) => i === 'WATCH_STEEL_SV')

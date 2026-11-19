@@ -9,7 +9,10 @@ Une extension UI OneStock (`bo.page`) qui permet de :
    - `GET /delivery_routes` et `GET /zones` : les chaînes de routes possibles (multi-leg), avec leurs temps de transit et leurs coûts ;
    - `GET /stock_export` (`request_name: detailed_ois`, `aggregates['*'].item_filter.ids`) : le stock disponible et le
      stock futur (ASN, commandes fournisseur : `quantity` disponible entre `eta_start` et `eta_end`) en une seule requête.
-     `GET /stocks` n'est appelé que si l'export échoue ou ne contient aucune ligne de stock courant. Le stock futur n'est
+     `GET /stocks` n'est appelé que si l'export échoue ou ne contient aucune ligne de stock courant.
+     Les types de stock du site viennent de `GET /configurations` (`keys: ["stock"]`, `scopes: {site: true}`) :
+     `stock.on_hand` est le stock disponible, les autres `stock.types` (ex. `asn`) le stock futur ; les autres types
+     sont ignorés. Le stock futur n'est
      utilisé qu'à défaut de stock disponible : la préparation démarre à son arrivée (au plus tôt `eta_start`, au plus
      tard `eta_end`), ce qui décale la date de livraison estimée ;
    - les grilles de coûts des routes, évaluées sur les caractéristiques des articles (poids, quantité) et le prix de la commande ;

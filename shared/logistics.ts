@@ -430,6 +430,35 @@ export function schemaCost(schema: LogisticSchema): number | undefined {
   return costs.reduce<number>((sum, c) => sum + (c ?? 0), 0);
 }
 
+/** Stock types of the site (GET /configurations keys ["stock"]): the on hand type and every type in use (asn...). */
+export interface StockTypes {
+  on_hand: string;
+  types: string[];
+}
+
+export function parseStockTypes(payload: unknown): StockTypes | undefined {
+  const root = (payload ?? {}) as Record<string, unknown>;
+  const conf = ((root.stock ?? (root.configurations as Record<string, unknown> | undefined)?.stock ?? root) ?? {}) as Record<string, unknown>;
+  const types = Array.isArray(conf.types) ? conf.types.map(String) : [];
+  const onHand = typeof conf.on_hand === 'string' && conf.on_hand ? conf.on_hand : types.includes('on_hand') ? 'on_hand' : undefined;
+  if (!onHand && !types.length) return undefined;
+  return { on_hand: onHand ?? 'on_hand', types: types.length ? types : [onHand ?? 'on_hand'] };
+}
+
+/**
+ * Lines kept for the promise according to the stock types of the site: the on hand type is the available stock,
+ * the other types are future stock (ASN...) when they carry an arrival window; any other type is ignored.
+ */
+export function applyStockTypes(lines: StockLine[], st: StockTypes | undefined): StockLine[] {
+  if (!st) return lines;
+  return lines.flatMap((l) => {
+    if (!l.type) return [l];
+    if (l.type === st.on_hand) return [{ ...l, type: 'on_hand', eta_start: undefined, eta_end: undefined }];
+    if (st.types.includes(l.type) && l.eta_end !== undefined) return [l];
+    return [];
+  });
+}
+
 /** Epoch seconds from a timestamp (seconds or milliseconds) or an ISO date. */
 function epochSeconds(v: unknown): number | undefined {
   if (typeof v === 'number' && Number.isFinite(v)) return v > 1e12 ? Math.floor(v / 1000) : v;

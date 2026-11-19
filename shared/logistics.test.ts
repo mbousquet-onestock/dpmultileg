@@ -184,3 +184,20 @@ describe('priorities from the delivery config', () => {
     expect(ids(schemas[bestByPriorities(fastest, schemas, noStores)])).toBe('r_hub_idf_sdd');
   });
 });
+
+describe('stock types (GET /configurations)', () => {
+  it('keeps the on hand type as available stock and the other types as future stock', async () => {
+    const { applyStockTypes, parseStockTypes } = await import('./logistics.js');
+    const st = parseStockTypes({ stock: { types: ['on_hand', 'asn'], on_hand: 'on_hand' } });
+    expect(st).toEqual({ on_hand: 'on_hand', types: ['on_hand', 'asn'] });
+    const lines = applyStockTypes(
+      [
+        { endpoint_id: 'W', item_id: 'A', quantity: 3, type: 'on_hand' },
+        { endpoint_id: 'W', item_id: 'A', quantity: 10, type: 'asn', eta_start: 1, eta_end: 2 },
+        { endpoint_id: 'W', item_id: 'A', quantity: 5, type: 'reserved' },
+      ],
+      st,
+    );
+    expect(lines.map((l) => l.type)).toEqual(['on_hand', 'asn']);
+  });
+});
