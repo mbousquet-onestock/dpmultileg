@@ -312,6 +312,41 @@ function chainLegs(a: SchemaAnalysis) {
               <OsBadge v-if="row.selected" :text="t('schemaSelected')" color="green" icon="check" />
             </span>
           </div>
+          <!-- Consolidated route: transfers to the consolidation point, then delivery of every item from it -->
+          <template v-if="isConsolidated(row.a) && option.consolidation">
+            <div v-for="(tr, k) in option.consolidation.transfers" :key="'tr' + k" class="segment">
+              <span class="os-body-m os-text-secondary carried-label">{{ t('segmentTransfer') }}</span>
+              <SchemaChain
+                :legs="tr.schema.legs.map((l) => ({ route: l.route, configCarrier: false }))"
+                :destination="{ endpoint_id: option.consolidation.point }"
+                compact
+              />
+              <div class="carried">
+                <span class="os-body-m os-text-secondary carried-label">{{ t('carriedItems') }}</span>
+                <span class="carried-item">
+                  <img v-if="itemImage(tr.item_id)" :src="itemImage(tr.item_id)" alt="" />
+                  <span class="os-label-s">{{ itemLabel(tr.item_id) }}</span>
+                  <span class="os-body-m qty">× {{ tr.qty }}</span>
+                </span>
+                <span class="os-body-s os-text-secondary">{{ t('segmentArrival').replace('{at}', formatDate(tr.arrival)) }}</span>
+              </div>
+            </div>
+            <div class="segment">
+              <span class="os-body-m os-text-secondary carried-label">{{ t('segmentDelivery') }}</span>
+              <SchemaChain :legs="chainLegs(row.a)" :destination="dest" compact />
+            <div v-for="sh in row.a.shipments" :key="sh.index" class="carried">
+              <span class="os-body-m os-text-secondary carried-label">
+                {{ (option.shipment_number ?? 1) > 1 ? `${t('shipment')} ${sh.index + 1} · ` : '' }}{{ t('carriedItems') }}
+              </span>
+              <span v-for="l in sh.lines" :key="l.item_id" class="carried-item">
+                <img v-if="itemImage(l.item_id)" :src="itemImage(l.item_id)" alt="" />
+                <span class="os-label-s">{{ itemLabel(l.item_id) }}</span>
+                <span class="os-body-m qty">× {{ l.qty }}</span>
+              </span>
+            </div>
+            </div>
+          </template>
+          <template v-else>
           <SchemaChain :legs="chainLegs(row.a)" :destination="dest" compact />
           <div v-for="sh in row.a.shipments" :key="sh.index" class="carried">
             <span class="os-body-m os-text-secondary carried-label">
@@ -323,6 +358,7 @@ function chainLegs(a: SchemaAnalysis) {
               <span class="os-body-m qty">× {{ l.qty }}</span>
             </span>
           </div>
+          </template>
           <ul v-if="display.timeline && (row.a.timeline?.length || row.a.operations?.length)" class="timeline os-body-s">
             <li v-for="(line, k) in timelineLines(row.a)" :key="k"><OsIcon icon="time" size="xs" /> <span>{{ line }}</span></li>
           </ul>
@@ -369,6 +405,9 @@ header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16
 .theo.used { border: 1px solid var(--os-green-1000); background: var(--os-green-t-100); --chain-bg: #ecf5ec; }
 .theo-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; }
 .badges { display: inline-flex; gap: 6px; }
+.segment { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; margin-top: 4px; border-top: 1px dashed var(--os-border); }
+.segment:first-of-type { border-top: none; margin-top: 0; }
+.segment .carried { margin-top: 0; }
 .carried { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--os-border); }
 .carried-label { text-transform: uppercase; letter-spacing: 0.04em; font-size: 10px; }
 .carried-item { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 2px; border-radius: 5px; background: #fff; border: 1px solid var(--os-border); color: var(--os-text-primary); }
