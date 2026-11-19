@@ -79,7 +79,9 @@ export interface SchemaAnalysis {
   /** Shipments of the promise using this schema: stock location and lines carried. */
   shipments: { index: number; endpoint: string; lines: LineItem[] }[];
   /** Stock locations of the origin zone holding each line. */
-  stock: { item_id: string; qty: number; endpoints: { id: string; quantity: number }[] }[];
+  stock: { item_id: string; qty: number; endpoints: { id: string; quantity: number; available_from?: number; available_to?: number }[] }[];
+  /** Future stock used by the shipping stock location retained for the timing. */
+  future_stock?: FutureStockUse[];
   /** Why the schema can not serve some lines. */
   exclusions: { kind: ExclusionKind; item_id?: string; text: string }[];
   eta_start: number;
@@ -115,6 +117,8 @@ export interface LocalPromiseOption extends PromiseOption {
   stock_unverified?: boolean;
   /** Consolidation (option "consolidation"): items grouped at an intermediate point, then one shipment. */
   consolidation?: Consolidation;
+  /** Future stock (ASN, purchase orders...) the promise relies on. */
+  future_stock?: FutureStockUse[];
   /** Consolidation requested but no consolidation point found: the normal allocation is kept. */
   consolidation_failed?: boolean;
 }
@@ -324,7 +328,44 @@ export function constraintFailure(route: DeliveryRoute, lines: LineItem[], items
 const AVAILABLE = new Set(['on_hand', 'available', 'physical', 'stock', '']);
 
 function stockOf(stock: StockLine[], endpoint: string, item: string): number {
-  return stock.filter((s) => s.endpoint_id === endpoint && s.item_id === item && AVAILABLE.has(s.type ?? '')).reduce((n, s) => n + s.quantity, 0);
+  return stock
+    .filter((s) => s.endpoint_id === endpoint && s.item_id === item && s.eta_end === undefined && AVAILABLE.has(s.type ?? ''))
+    .reduce((n, s) => n + s.quantity, 0);
+}
+
+/** Future stock line used to serve a line (ASN, purchase order...). */
+export interface FutureStockUse {
+  item_id: string;
+  endpoint_id: string;
+  quantity: number;
+  type?: string;
+  eta_start: number;
+  eta_end: number;
+  purchase_order_number?: string;
+}
+
+/**
+ * Availability of a quantity in a stock location: on hand stock first, then the future stock lines by arrival date.
+ * start / end: the quantity is there at the earliest at start, at the latest at end (0 = on hand).
+ */
+export function availability(
+  stock: StockLine[],
+  endpoint: string,
+  item: string,
+  qty: number,
+): { quantity: number; start: number; end: number; future: FutureStockUse[] } | undefined {
+  let acc = stockOf(stock, endpoint, item);
+  if (acc >= qty) return { quantity: acc, start: 0, end: 0, future: [] };
+  const incoming = stock
+    .filter((s) => s.endpoint_id === endpoint && s.item_id === item && s.eta_end !== undefined && s.quantity > 0)
+    .sort((a, b) => a.eta_end! - b.eta_end! || (a.eta_start ?? 0) - (b.eta_start ?? 0));
+  const future: FutureStockUse[] = [];
+  for (const f of incoming) {
+    acc += f.quantity;
+    future.push({ item_id: item, endpoint_id: endpoint, quantity: f.quantity, type: f.type, eta_start: f.eta_start ?? f.eta_end!, eta_end: f.eta_end!, purchase_order_number: f.purchase_order_number });
+    if (acc >= qty) return { quantity: acc, start: Math.max(...future.map((x) => x.eta_start)), end: Math.max(...future.map((x) => x.eta_end)), future };
+  }
+  return undefined;
 }
 
 /** Value of a priority criterion for an analysed schema: real ETA (timetables) for time criteria, metrics otherwise. */
@@ -442,6 +483,47 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   const started = atStart?.end ?? from;
   const destEndpoint = destination.endpoint_id ? ctx.endpoints.get(destination.endpoint_id) : undefined;
 
+  /** Moment the lines are all in a stock location (on hand or future stock): earliest (fast) / latest (slow). */
+  type ShipTiming = {
+    endpoint?: string;
+    prep: OperationTiming[];
+    fast: LegTiming[];
+    slow: LegTiming[];
+    endFast: number;
+    endSlow: number;
+    after: OperationTiming[];
+    future: FutureStockUse[];
+  };
+  const readyAt = (endpoint: string | undefined, ls: LineItem[]) => {
+    let fast = started;
+    let slow = started;
+    const future: FutureStockUse[] = [];
+    if (endpoint && !stockUnverified)
+      for (const l of ls) {
+        const av = availability(stock, endpoint, l.item_id, l.qty);
+        if (!av) continue;
+        fast = Math.max(fast, av.start);
+        slow = Math.max(slow, av.end);
+        future.push(...av.future);
+      }
+    return { fast, slow, future };
+  };
+  /** Timing of a shipment from a stock location: preparation once the stock is there, carrier timetables, receiving. */
+  const timeFrom = (routes: DeliveryRoute[], endpoint: string | undefined, ls: LineItem[]): ShipTiming | undefined => {
+    const ep = endpoint ? ctx.endpoints.get(endpoint) : undefined;
+    const ready = readyAt(endpoint, ls);
+    const prepFast = runOperations('before_shipping', config, ep, ready.fast, timing);
+    const prepSlow = ready.slow === ready.fast ? prepFast : runOperations('before_shipping', config, ep, ready.slow, timing);
+    if (!prepFast || !prepSlow) return undefined;
+    const fast = timeLegs(routes, prepFast.end, 'min', timing);
+    const slow = timeLegs(routes, prepSlow.end, 'max', timing);
+    if (!fast || !slow) return undefined;
+    const afterFast = runOperations('after_shipping', config, destEndpoint, fast[fast.length - 1].delivered, timing);
+    const afterSlow = runOperations('after_shipping', config, destEndpoint, slow[slow.length - 1].delivered, timing);
+    if (!afterFast || !afterSlow) return undefined;
+    return { endpoint, prep: prepSlow.steps, fast, slow, endFast: afterFast.end, endSlow: afterSlow.end, after: afterSlow.steps, future: ready.future };
+  };
+
   // 3-4. exclusions and stock per schema
   const analysis: SchemaAnalysis[] = schemas.map((schema) => {
     const exclusions: SchemaAnalysis['exclusions'] = [];
@@ -451,7 +533,10 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       qty: l.qty,
       endpoints: stockUnverified
         ? originEndpoints.map((id) => ({ id, quantity: NaN }))
-        : originEndpoints.map((id) => ({ id, quantity: stockOf(stock, id, l.item_id) })).filter((e) => e.quantity >= l.qty),
+        : originEndpoints.flatMap((id) => {
+            const av = availability(stock, id, l.item_id, l.qty);
+            return av ? [{ id, quantity: av.quantity, available_from: av.start || undefined, available_to: av.end || undefined }] : [];
+          }),
     }));
     for (const l of lines) {
       for (const leg of schema.legs) {
@@ -486,19 +571,10 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     const routes = schema.legs.map((l) => l.route);
     const withStock = originEndpoints.filter((id) => stockUnverified || stockLines.every((sl) => sl.endpoints.some((e) => e.id === id)));
     const candidates = (withStock.length ? withStock : originEndpoints).slice(0, 25);
-    let best: { endpoint?: string; prep: OperationTiming[]; fast: LegTiming[]; slow: LegTiming[]; endFast: number; endSlow: number; after: OperationTiming[] } | undefined;
+    let best: ShipTiming | undefined;
     for (const id of candidates.length ? candidates : [undefined]) {
-      const ep = id ? ctx.endpoints.get(id) : undefined;
-      const prep = runOperations('before_shipping', config, ep, started, timing);
-      if (!prep) continue;
-      const fast = timeLegs(routes, prep.end, 'min', timing);
-      const slow = timeLegs(routes, prep.end, 'max', timing);
-      if (!fast || !slow) continue;
-      const afterFast = runOperations('after_shipping', config, destEndpoint, fast[fast.length - 1].delivered, timing);
-      const afterSlow = runOperations('after_shipping', config, destEndpoint, slow[slow.length - 1].delivered, timing);
-      if (!afterFast || !afterSlow) continue;
-      if (!best || afterSlow.end < best.endSlow)
-        best = { endpoint: id, prep: prep.steps, fast, slow, endFast: afterFast.end, endSlow: afterSlow.end, after: afterSlow.steps };
+      const t = timeFrom(routes, id, lines);
+      if (t && (!best || t.endSlow < best.endSlow)) best = t;
     }
     if (!best || !atStart)
       for (const l of lines) exclusions.push({ kind: 'timetable', item_id: l.item_id, text: routes.map((r) => `${r.carrier.name} · ${r.carrier.option}`).join(' → ') });
@@ -518,6 +594,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       timeline: best?.slow,
       operations: best ? [...(atStart?.steps ?? []), ...best.prep, ...best.after] : atStart?.steps,
       timing_endpoint: best?.endpoint,
+      future_stock: best?.future.length ? best.future : undefined,
       costs,
       cost: costs.some((c) => c.cost !== undefined) ? costs.reduce((sum, c) => sum + (c.cost ?? 0), 0) : schemaCost(schema),
       carbon: costs.some((c) => c.carbon !== undefined) ? costs.reduce((sum, c) => sum + (c.carbon ?? 0), 0) : undefined,
@@ -525,13 +602,16 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     };
   })
     .sort(byPriorities(order))
+    // future stock (ASN, purchase orders) only when the stock on hand cannot serve: stable sort, priorities kept otherwise
+    .sort((x, y) => (x.future_stock ? 1 : 0) - (y.future_stock ? 1 : 0))
     .filter(dedupeSchemas());
 
   const canServe = (a: SchemaAnalysis, item: string) => !a.exclusions.some((e) => e.item_id === item);
 
   // Click & collect served by the stock of the collection store itself (no transport).
-  if (isClickAndCollect(config) && destination.endpoint_id && !stockUnverified && lines.every((l) => stockOf(stock, destination.endpoint_id!, l.item_id) >= l.qty)) {
-    const local = runOperations('from_destination', config, destEndpoint, started, timing);
+  if (isClickAndCollect(config) && destination.endpoint_id && !stockUnverified && lines.every((l) => availability(stock, destination.endpoint_id!, l.item_id, l.qty))) {
+    const there = readyAt(destination.endpoint_id, lines);
+    const local = runOperations('from_destination', config, destEndpoint, there.slow, timing);
     const end = local?.end ?? started;
     const h = (end - from) / 3600;
     return {
@@ -547,6 +627,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       cost: 0,
       shipment_number: 1,
       delivery_routes: [],
+      future_stock: there.future.length ? there.future : undefined,
     };
   }
   if (!schemas.length) return { ...base, config, analysis, operations_hours: opsHours, status: 'none', reason: 'no_eligible_route' };
@@ -647,6 +728,10 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         shipment_number: 1,
         delivery_routes: [...transferRoutes, ...finalRoutes],
         consolidation: c,
+        future_stock: (() => {
+          const f = [...readyAt(c.point, c.local).future, ...c.transfers.flatMap((tr) => readyAt(tr.from, [{ item_id: tr.item_id, qty: tr.qty }]).future)];
+          return f.length ? f : undefined;
+        })(),
       };
     }
     consolidationFailed = true;
@@ -677,7 +762,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
         const transfers: ConsolidationTransfer[] = [];
         let ok = true;
         for (const l of lines) {
-          if (!stockUnverified && stockOf(stock, point.id, l.item_id) >= l.qty) {
+          if (!stockUnverified && availability(stock, point.id, l.item_id, l.qty)) {
             local.push(l);
             continue;
           }
@@ -690,8 +775,8 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
             const chainRoutes = chain.legs.map((x) => x.route);
             if (chainRoutes.some((r) => !selectVariant(r, [l], items, orderPrice).variant)) continue;
             for (const from of zoneEndpoints(ctx.zones.get(chain.originZoneId ?? ''), ctx).slice(0, 25)) {
-              if (from.id === point.id || stockOf(stock, from.id, l.item_id) < l.qty) continue;
-              const prep = runOperations('before_shipping', config!, ctx.endpoints.get(from.id), started, timing);
+              if (from.id === point.id || !availability(stock, from.id, l.item_id, l.qty)) continue;
+              const prep = runOperations('before_shipping', config!, ctx.endpoints.get(from.id), readyAt(from.id, [l]).slow, timing);
               if (!prep) continue;
               const legs = timeLegs(chainRoutes, prep.end, 'max', timing);
               if (!legs) continue;
@@ -713,7 +798,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
           transfers.push(best);
         }
         if (!ok) continue;
-        const prepLocal = runOperations('before_shipping', config!, pointEp, started, timing);
+        const prepLocal = runOperations('before_shipping', config!, pointEp, readyAt(point.id, local).slow, timing);
         if (!prepLocal) continue;
         const ready = Math.max(prepLocal.end, ...transfers.map((tr) => tr.arrival));
         const routes = a.schema.legs.map((x) => x.route);
@@ -758,10 +843,18 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     return candidates[0];
   }
 
-  // 7. routes, dates, cost
-  const deliveryRoutes: PromiseRoute[] = shipments.flatMap((s) =>
+  // 7. routes, dates, cost: timing of each shipment from its own stock location (on hand or future stock)
+  const times = shipments.map((s) => {
+    const own = s.endpoint === s.a.timing_endpoint && s.lines.length === lines.length;
+    const t = own ? undefined : timeFrom(s.a.schema.legs.map((l) => l.route), s.endpoint, s.lines);
+    if (!t) return { eta_start: s.a.eta_start, eta_end: s.a.eta_end, cutoff: s.a.cutoff, timeline: s.a.timeline, future: s.a.future_stock ?? [] };
+    const pickup = t.fast[0]?.pickup;
+    const opsBefore = [...(atStart?.steps ?? []), ...t.prep].reduce((h, st) => h + st.hours, 0);
+    return { eta_start: t.endFast, eta_end: t.endSlow, cutoff: pickup ? pickup.end - Math.round(opsBefore * 3600) : undefined, timeline: t.slow, future: t.future };
+  });
+  const deliveryRoutes: PromiseRoute[] = shipments.flatMap((s, si) =>
     s.a.schema.legs.map((leg, idx) => {
-      const tl = s.a.timeline?.[idx];
+      const tl = times[si].timeline?.[idx];
       return {
         id: leg.route.id,
         carrier: leg.route.carrier,
@@ -775,7 +868,8 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
       };
     }),
   );
-  const cutoffs = shipments.map((s) => s.a.cutoff).filter((c): c is number => c !== undefined);
+  const cutoffs = times.map((x) => x.cutoff).filter((c): c is number => c !== undefined);
+  const futureStock = times.flatMap((x) => x.future);
   const cost = shipments.reduce((sum, s) => sum + (s.a.cost ?? 0), 0);
   const fees = shipments.some((s) => s.a.shipping_fees !== undefined) ? shipments.reduce((sum, s) => sum + (s.a.shipping_fees ?? 0), 0) : undefined;
   const carbon = shipments.reduce((sum, s) => sum + (s.a.carbon ?? criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
@@ -787,8 +881,9 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     operations_hours: shipments[0]?.a.timeline?.[0] ? (shipments[0].a.timeline[0].ready - from) / 3600 : opsHours,
     stock_unverified: stockUnverified,
     status: excluded.length ? 'partial' : 'valid',
-    eta_start: Math.max(...shipments.map((s) => s.a.eta_start)),
-    eta_end: Math.max(...shipments.map((s) => s.a.eta_end)),
+    eta_start: Math.max(...times.map((x) => x.eta_start)),
+    eta_end: Math.max(...times.map((x) => x.eta_end)),
+    future_stock: futureStock.length ? futureStock : undefined,
     cutoff: cutoffs.length ? Math.min(...cutoffs) : undefined,
     cost: Math.round(cost * 100) / 100,
     shipping_fees: fees === undefined ? undefined : Math.round(fees * 100) / 100,

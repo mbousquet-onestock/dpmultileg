@@ -263,6 +263,23 @@ function chainLegs(a: SchemaAnalysis) {
         </template>
       </OsAlert>
       <OsAlert v-if="option.stock_unverified" type="warning" :subtitle="t('stockUnverified')" />
+      <OsAlert
+        v-if="option.future_stock?.length"
+        type="info"
+        :title="t('futureStockTitle')"
+        :subtitle="
+          option.future_stock
+            .map((f) =>
+              t('futureStockLine')
+                .replace('{qty}', String(f.quantity))
+                .replace('{item}', itemLabel(f.item_id))
+                .replace('{where}', endpointName(f.endpoint_id))
+                .replace('{ref}', [f.type?.toUpperCase(), f.purchase_order_number].filter(Boolean).join(' '))
+                .replace('{range}', formatRange(f.eta_start, f.eta_end)),
+            )
+            .join(' · ')
+        "
+      />
       <OsAlert v-if="unknownOperations.length" type="warning" :subtitle="t('unknownOperations').replace('{list}', unknownOperations.join(', '))" />
       <p v-if="display.config" class="os-body-s os-text-secondary method">
         {{ t('localComputation').replace('{ops}', formatHours(option.operations_hours, option.operations_hours, units)) }}

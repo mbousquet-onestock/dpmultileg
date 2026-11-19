@@ -1,6 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
-import { collectStockLines, sameCarrier } from '../../shared/logistics.js';
+import { collectStockLines, sameCarrier, type StockLine } from '../../shared/logistics.js';
 import { normalizeTimetable, type ExecutionTime, type ScheduledEvent, type Timetable } from '../../shared/timetables.js';
 import { asList, normalizeRoutes } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
@@ -255,8 +255,29 @@ export function apiRouter(): Router {
       const itemIds = Array.isArray(req.body?.item_ids) ? (req.body.item_ids as unknown[]).map(String).slice(0, 50) : [];
       const endpointIds = Array.isArray(req.body?.endpoint_ids) ? (req.body.endpoint_ids as unknown[]).map(String).slice(0, 500) : [];
       if (!itemIds.length || !endpointIds.length) return res.json({ stocks: [] });
-      const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
-      res.json({ stocks: collectStockLines(result) });
+      const wanted = new Set(endpointIds);
+      // One request: GET /stock_export (detailed_ois) returns the stock and the future stock (ASN, purchase orders:
+      // quantity available between eta_start and eta_end). GET /stocks only when the export has no current stock line
+      // for these locations, or when it fails.
+      let stocks: StockLine[] = [];
+      let exportError: string | undefined;
+      let source = 'stock_export';
+      try {
+        const exported = await callOnestock(t, 'GET', '/stock_export', {
+          request_name: 'detailed_ois',
+          aggregates: { '*': { item_filter: { ids: itemIds } } },
+        });
+        stocks = collectStockLines(exported).filter((l) => wanted.has(l.endpoint_id) && itemIds.includes(l.item_id));
+      } catch (e) {
+        exportError = e instanceof Error ? e.message : String(e);
+        log('warn', 'stock_export_failed', { request_id: req.requestId, ...errorFields(e) });
+      }
+      if (!stocks.some((l) => l.eta_end === undefined)) {
+        source = exportError ? 'stocks' : 'stock_export+stocks';
+        const result = await callOnestock(t, 'GET', '/stocks', { item_ids: itemIds, endpoint_ids: endpointIds });
+        stocks.push(...collectStockLines(result).filter((l) => l.eta_end === undefined));
+      }
+      res.json({ stocks, source, stock_export_error: exportError });
     }),
   );
 

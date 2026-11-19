@@ -420,6 +420,19 @@ export function mockOnestock(method: string, path: string, body: Record<string, 
         stocks: eps.flatMap((e) => items.filter((i) => (stock[e]?.[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: stock[e][i], type: 'on_hand' }))),
       };
     }
+    case '/stock_export': {
+      const ids = ((body.aggregates as Record<string, { item_filter?: { ids?: string[] } }> | undefined)?.['*']?.item_filter?.ids ?? []) as string[];
+      const now = Math.floor(Date.now() / 1000);
+      return {
+        stocks: [
+          ...Object.entries(stock).flatMap(([e, q]) => ids.filter((i) => (q[i] ?? 0) > 0).map((i) => ({ endpoint_id: e, item_id: i, quantity: q[i], type: 'stock' }))),
+          // An incoming purchase order: the watch arrives in the Toulouse warehouse in 2 to 4 days.
+          ...ids
+            .filter((i) => i === 'WATCH_STEEL_SV')
+            .map((i) => ({ item_id: i, endpoint_id: 'WH_TLS', quantity: 10, type: 'asn', eta_start: now + 2 * 86400, eta_end: now + 4 * 86400, purchase_order_number: 'PO_001' })),
+        ],
+      };
+    }
     case '/timetables': {
       const type = (body.filters as { type?: string } | undefined)?.type;
       return { timetables: mockTimetables.filter((x) => !type || x.type === type) };

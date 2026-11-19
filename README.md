@@ -7,7 +7,11 @@ Une extension UI OneStock (`bo.page`) qui permet de :
 3. **calculer les options de livraison** : la promesse est **reconstruite par l'extension**, sans appeler `GET /delivery_promises`, à partir de :
    - `GET /delivery_configs` : la configuration du mode dont les zones de livraison contiennent la destination, ses transporteurs, ses opérations et temps d'exécution, ses priorités, son nombre maximal d'expéditions et ses restrictions appliquées ;
    - `GET /delivery_routes` et `GET /zones` : les chaînes de routes possibles (multi-leg), avec leurs temps de transit et leurs coûts ;
-   - `GET /stocks` : le stock disponible (on hand) dans chaque lieu de stock d'origine ;
+   - `GET /stock_export` (`request_name: detailed_ois`, `aggregates['*'].item_filter.ids`) : le stock disponible et le
+     stock futur (ASN, commandes fournisseur : `quantity` disponible entre `eta_start` et `eta_end`) en une seule requête.
+     `GET /stocks` n'est appelé que si l'export échoue ou ne contient aucune ligne de stock courant. Le stock futur n'est
+     utilisé qu'à défaut de stock disponible : la préparation démarre à son arrivée (au plus tôt `eta_start`, au plus
+     tard `eta_end`), ce qui décale la date de livraison estimée ;
    - les grilles de coûts des routes, évaluées sur les caractéristiques des articles (poids, quantité) et le prix de la commande ;
 4. **voir le schéma logistique** de chaque option : la ou les routes sélectionnées selon les priorités du mode (par exemple la plus rapide parmi celles qui ont le stock), et pour chaque autre schéma la raison pour laquelle il n'est pas retenu (pas de stock, restriction, contrainte colis, critère de priorité).
 

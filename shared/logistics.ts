@@ -391,6 +391,10 @@ export interface StockLine {
   item_id: string;
   quantity: number;
   type?: string;
+  /** Future stock (ASN, purchase order...): the quantity is available between eta_start and eta_end (epoch seconds). */
+  eta_start?: number;
+  eta_end?: number;
+  purchase_order_number?: string;
 }
 
 export interface OriginAvailability {
@@ -426,6 +430,17 @@ export function schemaCost(schema: LogisticSchema): number | undefined {
   return costs.reduce<number>((sum, c) => sum + (c ?? 0), 0);
 }
 
+/** Epoch seconds from a timestamp (seconds or milliseconds) or an ISO date. */
+function epochSeconds(v: unknown): number | undefined {
+  if (typeof v === 'number' && Number.isFinite(v)) return v > 1e12 ? Math.floor(v / 1000) : v;
+  if (typeof v === 'string' && v.trim()) {
+    if (/^\d+$/.test(v.trim())) return epochSeconds(Number(v));
+    const t = Date.parse(v);
+    return Number.isNaN(t) ? undefined : Math.floor(t / 1000);
+  }
+  return undefined;
+}
+
 /** Collect stock lines from any payload shape ({stocks: [...]}, keyed objects, nested lists). */
 export function collectStockLines(payload: unknown, depth = 0): StockLine[] {
   if (!payload || typeof payload !== 'object' || depth > 6) return [];
@@ -435,7 +450,15 @@ export function collectStockLines(payload: unknown, depth = 0): StockLine[] {
   const endpoint = o.endpoint_id ?? o.endpoint;
   const qty = o.quantity ?? o.qty ?? o.stock;
   if (typeof item === 'string' && typeof endpoint === 'string' && (typeof qty === 'number' || typeof qty === 'string')) {
-    return [{ item_id: item, endpoint_id: endpoint, quantity: Number(qty) || 0, type: typeof o.type === 'string' ? o.type : undefined }];
+    const line: StockLine = { item_id: item, endpoint_id: endpoint, quantity: Number(qty) || 0, type: typeof o.type === 'string' ? o.type : undefined };
+    const start = epochSeconds(o.eta_start);
+    const end = epochSeconds(o.eta_end);
+    if (start !== undefined || end !== undefined) {
+      line.eta_start = start ?? end;
+      line.eta_end = end ?? start;
+    }
+    if (typeof o.purchase_order_number === 'string') line.purchase_order_number = o.purchase_order_number;
+    return [line];
   }
   return Object.values(o).flatMap((v) => collectStockLines(v, depth + 1));
 }

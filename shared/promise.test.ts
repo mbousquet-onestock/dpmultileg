@@ -230,3 +230,24 @@ describe('durations', () => {
     expect(parseDurationHours(90)).toBe(1.5);
   });
 });
+
+describe('future stock (ASN)', () => {
+  const asn = { endpoint_id: 'WH_TLS', item_id: 'WATCH_STEEL_SV', quantity: 10, type: 'asn', eta_start: from + 3 * 86400, eta_end: from + 5 * 86400, purchase_order_number: 'PO_001' };
+
+  it('serves a quantity missing on hand once the future stock has arrived', () => {
+    const now = run('HD_standard', [['WATCH_STEEL_SV', 5]]);
+    expect(now.status).toBe('none');
+    const later = run('HD_standard', [['WATCH_STEEL_SV', 5]], paris, { stock: [...stock, asn] });
+    expect(later.status).not.toBe('none');
+    expect(later.future_stock?.[0]).toMatchObject({ endpoint_id: 'WH_TLS', quantity: 10, purchase_order_number: 'PO_001' });
+    // delivered after the arrival window
+    expect(later.eta_start!).toBeGreaterThan(asn.eta_start);
+    expect(later.eta_end!).toBeGreaterThan(asn.eta_end);
+  });
+
+  it('prefers the stock on hand to the future stock', () => {
+    const o = run('HD_standard', [['WATCH_STEEL_SV', 1]], paris, { stock: [...stock, asn] });
+    expect(o.future_stock).toBeUndefined();
+    expect(o.eta_end!).toBeLessThan(asn.eta_end);
+  });
+});
