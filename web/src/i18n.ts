@@ -228,7 +228,7 @@ const fr = {
   capacityTransfer: 'transfert vers le point de consolidation',
   capacityPreparation: 'Préparation à {where} le {day} : {remaining} ligne(s) restante(s) pour {needed} à préparer',
   capacityCarrier: 'Enlèvement {carrier} à {where} le {day} : capacité en colis atteinte',
-  futureStockLine: '{qty} × {item} attendus à {where} ({ref}) : {range}',
+  futureStockLine: 'Arrivée de {qty} × {item} à {where} ({ref}) : {range}',
   localComputation: "Promesse calculée par l'extension à partir des modes de livraison, routes, zones, priorités et du stock (sans /delivery_promises). Date = maintenant, puis les opérations du mode sur leur calendrier d'exécution (execution_time_timetable, sinon horaires du lieu de stock), puis pour chaque route : prochain créneau d'enlèvement (cutoff transporteur), transit sur les jours de roulage, prochain créneau de livraison (fin de créneau).",
   schemaReturned: 'Renvoyé par OneStock',
   configRaw: 'Configuration du mode (GET /delivery_configs)',
