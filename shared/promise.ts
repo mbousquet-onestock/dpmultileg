@@ -122,6 +122,10 @@ export interface LocalPromiseOption extends PromiseOption {
   local_pickup?: boolean;
   /** Operations timed for a local pickup (at start + from destination). */
   local_operations?: OperationTiming[];
+  /** Click & collect: lines served by the stock of the collection store (no transport). */
+  local_lines?: LineItem[];
+  /** Click & collect: those lines are ready in the store. */
+  local_ready?: number;
   /** The stock could not be read: availability not verified. */
   stock_unverified?: boolean;
   /** Consolidation (option "consolidation"): items grouped at an intermediate point, then one shipment. */
@@ -730,40 +734,48 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
 
   const canServe = (a: SchemaAnalysis, item: string) => !a.exclusions.some((e) => e.item_id === item);
 
-  // Click & collect served by the stock of the collection store itself (no transport).
-  if (isClickAndCollect(config) && destination.endpoint_id && !stockUnverified && lines.every((l) => availability(stock, destination.endpoint_id!, l.item_id, l.qty))) {
-    const there = readyAt(destination.endpoint_id, lines);
-    // preparation in the collection store, within its preparation capacity (order lines): next day while full
-    const ccDelays: CapacityDelay[] = [];
+  // Click & collect: the lines in stock in the collection store are served there, without transport; only the other
+  // lines are shipped to the store.
+  const pickupStore = isClickAndCollect(config) && destination.endpoint_id && !stockUnverified ? destination.endpoint_id : undefined;
+  const localLines = pickupStore ? lines.filter((l) => availability(stock, pickupStore, l.item_id, l.qty)) : [];
+  /** Preparation in the collection store, within its preparation capacity (order lines): next day while full. */
+  const prepareInStore = (ls: LineItem[]) => {
+    const there = readyAt(pickupStore, ls);
+    const delays: CapacityDelay[] = [];
     let t = there.slow;
     let local = runOperations('from_destination', config, destEndpoint, t, timing);
     for (let day = 0; day < MAX_CAPACITY_DAYS && input.capacity && destEndpoint; day++) {
       const at = local?.end ?? t;
-      const pc = input.capacity({ kind: 'preparation', endpoint: destEndpoint.id, at, timezone: destEndpoint.timezone, needed: lines.length });
-      if (!pc || pc.remaining >= lines.length || pc.until <= t) break;
-      ccDelays.push({ kind: 'preparation', endpoint: destEndpoint.id, day: pc.until - 86400, remaining: Math.max(0, pc.remaining), needed: lines.length });
+      const pc = input.capacity({ kind: 'preparation', endpoint: destEndpoint.id, at, timezone: destEndpoint.timezone, needed: ls.length });
+      if (!pc || pc.remaining >= ls.length || pc.until <= t) break;
+      delays.push({ kind: 'preparation', endpoint: destEndpoint.id, day: pc.until - 86400, remaining: Math.max(0, pc.remaining), needed: ls.length });
       t = pc.until;
       local = runOperations('from_destination', config, destEndpoint, t, timing);
     }
-    const end = local?.end ?? t;
-    const h = (end - from) / 3600;
+    return { end: local?.end ?? t, steps: [...(atStart?.steps ?? []), ...(local?.steps ?? [])], delays, future: there.future };
+  };
+  const inStore = localLines.length ? prepareInStore(localLines) : undefined;
+  if (inStore && localLines.length === lines.length) {
     return {
       ...base,
       config,
       analysis,
-      operations_hours: h,
+      operations_hours: (inStore.end - from) / 3600,
       local_pickup: true,
-      local_operations: [...(atStart?.steps ?? []), ...(local?.steps ?? [])],
+      local_operations: inStore.steps,
+      local_lines: localLines,
       status: 'valid',
-      eta_start: end,
-      eta_end: end,
+      eta_start: inStore.end,
+      eta_end: inStore.end,
       cost: 0,
       shipment_number: 1,
       delivery_routes: [],
-      future_stock: there.future.length ? there.future : undefined,
-      capacity_delays: ccDelays.length ? ccDelays : undefined,
+      future_stock: inStore.future.length ? inStore.future : undefined,
+      capacity_delays: inStore.delays.length ? inStore.delays : undefined,
     };
   }
+  /** Lines to ship (all the lines, except those served by the collection store stock). */
+  const toShip = inStore ? lines.filter((l) => !localLines.includes(l)) : lines;
   if (!schemas.length) return { ...base, config, analysis, operations_hours: opsHours, status: 'none', reason: 'no_eligible_route' };
 
   // 5. allocation: one shipment serving every line if possible, else split (best schema first) within the limit.
@@ -775,11 +787,13 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     return a.stock.find((s) => s.item_id === ls[0].item_id)?.endpoints.find((e) => holds(e.id))?.id;
   };
 
-  const single = analysis.find((a) => lines.every((l) => canServe(a, l.item_id)) && endpointFor(a, lines));
-  if (single) shipments.push({ a: single, endpoint: endpointFor(single, lines)!, lines: [...lines] });
+  // the parcel prepared in the collection store counts as a shipment
+  const shipLimit = Math.max(1, maxShipments - (inStore ? 1 : 0));
+  const single = analysis.find((a) => toShip.every((l) => canServe(a, l.item_id)) && endpointFor(a, toShip));
+  if (single) shipments.push({ a: single, endpoint: endpointFor(single, toShip)!, lines: [...toShip] });
   else {
-    let remaining = [...lines];
-    while (remaining.length && shipments.length < maxShipments) {
+    let remaining = [...toShip];
+    while (remaining.length && shipments.length < shipLimit) {
       // the best ranked schema/location serving the largest group of remaining lines
       let best: Shipment | undefined;
       for (const a of analysis) {
@@ -797,12 +811,34 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
   }
 
   const served = shipments.flatMap((s) => s.lines);
-  const excluded = lines.filter((l) => !served.includes(l));
+  const excluded = toShip.filter((l) => !served.includes(l));
+  if (!shipments.length && inStore) {
+    // the other lines cannot be shipped to the store: partial, served by the store stock only
+    return {
+      ...base,
+      config,
+      analysis,
+      operations_hours: (inStore.end - from) / 3600,
+      local_pickup: true,
+      local_operations: inStore.steps,
+      local_lines: localLines,
+      status: 'partial',
+      eta_start: inStore.end,
+      eta_end: inStore.end,
+      cost: 0,
+      shipment_number: 1,
+      delivery_routes: [],
+      line_items: localLines,
+      excluded_line_items: toShip,
+      future_stock: inStore.future.length ? inStore.future : undefined,
+      capacity_delays: inStore.delays.length ? inStore.delays : undefined,
+    };
+  }
   if (!shipments.length) {
     const restricted = analysis.every((a) => a.exclusions.some((e) => e.kind !== 'no_stock'));
     return { ...base, config, analysis, operations_hours: opsHours, status: 'none', reason: restricted ? 'no_eligible_route' : 'no_stock', stock_unverified: stockUnverified };
   }
-  if (excluded.length && shipments.length >= maxShipments && !single) {
+  if (excluded.length && shipments.length >= shipLimit && !single) {
     // more shipments would be needed than authorized
     if (!served.length) return { ...base, config, analysis, operations_hours: opsHours, status: 'none', reason: 'exceeds_authorized_shipment_number' };
   }
@@ -813,7 +849,8 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
 
   // 8. consolidation: one shipment from an intermediate point after transfers of the missing items
   let consolidationFailed = false;
-  if (input.consolidate && (shipments.length > 1 || excluded.length > 0)) {
+  // (click & collect with store stock: the items are already grouped in the collection store)
+  if (input.consolidate && !inStore && (shipments.length > 1 || excluded.length > 0)) {
     const c = consolidate();
     if (c) {
       for (const a of analysis) {
@@ -992,7 +1029,7 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
 
   // 7. routes, dates, cost: timing of each shipment from its own stock location (on hand or future stock)
   const times = shipments.map((s) => {
-    const own = s.endpoint === s.a.timing_endpoint && s.lines.length === lines.length;
+    const own = s.endpoint === s.a.timing_endpoint && s.lines.length === lines.length && !inStore;
     const t = own ? undefined : timeFrom(s.a.schema.legs.map((l) => l.route), s.endpoint, s.lines);
     if (!t) return { eta_start: s.a.eta_start, eta_end: s.a.eta_end, cutoff: s.a.cutoff, timeline: s.a.timeline, future: s.a.future_stock ?? [], delays: s.a.capacity_delays ?? [] };
     const pickup = t.fast[0]?.pickup;
@@ -1016,8 +1053,8 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     }),
   );
   const cutoffs = times.map((x) => x.cutoff).filter((c): c is number => c !== undefined);
-  const futureStock = times.flatMap((x) => x.future);
-  const capacityDelays = times.flatMap((x) => x.delays);
+  const futureStock = [...(inStore?.future ?? []), ...times.flatMap((x) => x.future)];
+  const capacityDelays = [...(inStore?.delays ?? []), ...times.flatMap((x) => x.delays)];
   const cost = shipments.reduce((sum, s) => sum + (s.a.cost ?? 0), 0);
   const fees = shipments.some((s) => s.a.shipping_fees !== undefined) ? shipments.reduce((sum, s) => sum + (s.a.shipping_fees ?? 0), 0) : undefined;
   const carbon = shipments.reduce((sum, s) => sum + (s.a.carbon ?? criterionValue(s.a.schema, 'carbon_footprint') ?? 0), 0);
@@ -1029,16 +1066,19 @@ function computeOption(input: PromiseInput, method: string): LocalPromiseOption 
     operations_hours: shipments[0]?.a.timeline?.[0] ? (shipments[0].a.timeline[0].ready - from) / 3600 : opsHours,
     stock_unverified: stockUnverified,
     status: excluded.length ? 'partial' : 'valid',
-    eta_start: Math.max(...times.map((x) => x.eta_start)),
-    eta_end: Math.max(...times.map((x) => x.eta_end)),
+    eta_start: Math.max(...times.map((x) => x.eta_start), inStore?.end ?? 0),
+    eta_end: Math.max(...times.map((x) => x.eta_end), inStore?.end ?? 0),
+    local_lines: inStore ? localLines : undefined,
+    local_operations: inStore?.steps,
+    local_ready: inStore?.end,
     future_stock: futureStock.length ? futureStock : undefined,
     capacity_delays: capacityDelays.length ? capacityDelays : undefined,
     cutoff: cutoffs.length ? Math.min(...cutoffs) : undefined,
     cost: Math.round(cost * 100) / 100,
     shipping_fees: fees === undefined ? undefined : Math.round(fees * 100) / 100,
     carbon_footprint: carbon || undefined,
-    shipment_number: shipments.length,
-    line_items: excluded.length ? served : undefined,
+    shipment_number: shipments.length + (inStore ? 1 : 0),
+    line_items: excluded.length ? [...localLines, ...served] : undefined,
     excluded_line_items: excluded.length ? excluded : undefined,
     delivery_routes: deliveryRoutes,
     consolidation_failed: consolidationFailed || undefined,

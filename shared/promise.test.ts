@@ -335,3 +335,17 @@ describe('capacities', () => {
     expect(o.capacity_delays).toBeUndefined();
   });
 });
+
+describe('click & collect with part of the items in the store', () => {
+  it('serves the items in stock in the collection store and ships only the others', () => {
+    // ST_PARIS holds the scarf, not the parka (warehouse)
+    const o = run('CKC', [['SCARF_WOOL_RD', 1], ['PARKA_WINTER_KK_M', 1]], { endpoint_id: 'ST_PARIS' });
+    expect(o.status).toBe('valid');
+    expect(o.local_lines?.map((l) => l.item_id)).toEqual(['SCARF_WOOL_RD']);
+    const shipped = (o.delivery_routes ?? []).flatMap((r) => r.items.map((i) => i.id));
+    expect(shipped).toContain('PARKA_WINTER_KK_M');
+    expect(shipped).not.toContain('SCARF_WOOL_RD');
+    expect(o.shipment_number).toBe(2);
+    expect(o.eta_end!).toBeGreaterThanOrEqual(o.local_ready!);
+  });
+});

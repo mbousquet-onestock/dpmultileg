@@ -257,7 +257,17 @@ function chainLegs(a: SchemaAnalysis) {
         </ul>
       </div>
       <OsAlert v-if="option.consolidation_failed" type="info" :subtitle="t('consolidationFailed')" />
-      <OsAlert v-if="option.local_pickup" type="success" :subtitle="t('localPickup')">
+      <OsAlert
+        v-if="option.local_pickup || option.local_lines?.length"
+        type="success"
+        :subtitle="
+          option.local_pickup
+            ? t('localPickup')
+            : t('localPickupPart')
+                .replace('{items}', (option.local_lines ?? []).map((l) => `${itemLabel(l.item_id)} × ${l.qty}`).join(', '))
+                .replace('{date}', formatDate(option.local_ready))
+        "
+      >
         <template #content>
           <span v-for="(op, k) in option.local_operations ?? []" :key="k" class="os-body-s">{{ operationLine(op) }}</span>
         </template>
