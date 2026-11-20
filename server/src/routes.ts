@@ -566,7 +566,7 @@ async function loadReferential(t: Target, requestId?: string) {
   const etIds = [
     ...new Set([
       ...configs.flatMap((c) => Object.values((c.global_execution_times ?? {}) as Record<string, unknown>)),
-      ...endpoints.flatMap((e) => (e.execution_times ?? []).map((x) => x.id)),
+      ...endpoints.flatMap((e) => (Array.isArray(e.execution_times) ? e.execution_times : []).map((x) => x.id)),
     ]),
   ].filter((x): x is string => typeof x === 'string' && !!x);
   const executionTimes = await step(
@@ -772,7 +772,29 @@ async function fetchEndpoints(t: { site_id: string; environment: string; api_url
     fields: ['_id', 'name', 'classification', 'timezone', 'address', 'address.zip_code', 'address.city', 'address.regions', 'opening_hours', 'execution_times'],
     pagination: { start, limit: 100 },
   });
-  return asList<Endpoint>(res, 'endpoints');
+  return asList<Endpoint>(res, 'endpoints').map((e) => ({ ...e, execution_times: normalizeEndpointExecutionTimes((e as { execution_times?: unknown }).execution_times) }));
+}
+
+/**
+ * execution_times of a stock location, whatever its shape: a list ([{id, operation}] or ids) or an object
+ * {operation: id} (same shape as delivery_configs.global_execution_times) -> [{id, operation}].
+ */
+export function normalizeEndpointExecutionTimes(v: unknown): { id: string; operation?: string }[] | undefined {
+  if (v === undefined || v === null) return undefined;
+  const one = (x: unknown, operation?: string): { id: string; operation?: string }[] => {
+    if (typeof x === 'string' && x) return [{ id: x, operation }];
+    if (x && typeof x === 'object') {
+      const o = x as Record<string, unknown>;
+      const id = o.id ?? o._id ?? o.execution_time_id ?? o.public_id;
+      const op = typeof o.operation === 'string' ? o.operation : operation;
+      if (typeof id === 'string' && id) return [{ id, operation: op }];
+      if (Array.isArray(o.ids)) return o.ids.flatMap((i) => one(i, op));
+    }
+    return [];
+  };
+  if (Array.isArray(v)) return v.flatMap((x) => one(x));
+  if (typeof v === 'object') return Object.entries(v as Record<string, unknown>).flatMap(([op, x]) => (Array.isArray(x) ? x.flatMap((i) => one(i, op)) : one(x, op)));
+  return undefined;
 }
 
 export function simplifyItem(i: Item, lang: string): Item {

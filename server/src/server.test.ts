@@ -163,3 +163,15 @@ describe('GET /v3/items response', () => {
     }
   });
 });
+
+describe('endpoint execution times', () => {
+  it('accepts a list or an object {operation: id}', async () => {
+    const { normalizeEndpointExecutionTimes } = await import('./routes.js');
+    expect(normalizeEndpointExecutionTimes({ Paiement: 'et1', Picking: { id: 'et2' } })).toEqual([
+      { id: 'et1', operation: 'Paiement' },
+      { id: 'et2', operation: 'Picking' },
+    ]);
+    expect(normalizeEndpointExecutionTimes([{ id: 'et3', operation: 'Packing' }, 'et4'])).toEqual([{ id: 'et3', operation: 'Packing' }, { id: 'et4', operation: undefined }]);
+    expect(normalizeEndpointExecutionTimes('x')).toBeUndefined();
+  });
+});

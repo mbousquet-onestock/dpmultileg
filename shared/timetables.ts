@@ -433,7 +433,7 @@ export function executionTimeFor(
   endpoint: Endpoint | undefined,
   ctx: OperationsContext,
 ): { id?: string; et?: ExecutionTime; hours: number; unknown: boolean } {
-  const ref = endpoint?.execution_times?.find((e) => e.operation === op)?.id ?? (config.global_execution_times as Record<string, string> | undefined)?.[op];
+  const ref = (Array.isArray(endpoint?.execution_times) ? endpoint.execution_times : []).find((e) => e.operation === op)?.id ?? (config.global_execution_times as Record<string, string> | undefined)?.[op];
   // by id (id / _id / public_id), else by operation name (the list may expose other ids than the configuration)
   const all = [...ctx.executionTimes.values()];
   const anyId = (e: ExecutionTime) => [e.id, (e as unknown as Record<string, unknown>)._id, (e as unknown as Record<string, unknown>).public_id].map((x) => (x === undefined ? undefined : String(x)));
