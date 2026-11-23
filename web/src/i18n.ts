@@ -207,7 +207,7 @@ const fr = {
   loadOptionalKo: 'non autorisé',
   tlOperationUnknown: 'Opération {op} : durée inconnue (execution time non accessible), comptée 0',
   unknownOperations: "Durée inconnue pour : {list}. L'utilisateur API n'a pas accès à GET /execution_times : ces opérations sont comptées 0 et la date peut être trop tôt. Faites ouvrir les droits sur /execution_times.",
-  tlOperation: 'Opération {op} ({duration}{calendar}) : {from} → {to}',
+  tlOperation: 'Opération {op} ({duration}{calendar}) : {from} – {to}',
   tlPickup: 'enlèvement {at} (cutoff {cutoff})',
   tlDeparture: 'départ {at}',
   tlArrival: 'arrivée {at}',
@@ -479,7 +479,7 @@ const en: Dict = {
   loadOptionalKo: 'not allowed',
   tlOperationUnknown: 'Operation {op}: unknown duration (execution time not accessible), counted as 0',
   unknownOperations: 'Unknown duration for: {list}. The API user has no access to GET /execution_times: these operations are counted as 0 and the date may be too early. Ask for the rights on /execution_times.',
-  tlOperation: 'Operation {op} ({duration}{calendar}): {from} → {to}',
+  tlOperation: 'Operation {op} ({duration}{calendar}): {from} – {to}',
   tlPickup: 'pickup {at} (cutoff {cutoff})',
   tlDeparture: 'departure {at}',
   tlArrival: 'arrival {at}',
@@ -583,7 +583,7 @@ export function formatDate(ts?: number): string {
   }
 }
 
-/** Delivery window "from -> to"; same day: "Fri 20 Nov, 08:00 – 18:00". */
+/** Delivery window "from – to"; same day: "Fri 20 Nov, 08:00 – 18:00". */
 export function formatRange(from?: number, to?: number): string {
   if (!from || !to || from === to) return formatDate(to ?? from);
   try {
@@ -595,7 +595,7 @@ export function formatRange(from?: number, to?: number): string {
   } catch {
     /* fall through */
   }
-  return `${formatDate(from)} → ${formatDate(to)}`;
+  return `${formatDate(from)} – ${formatDate(to)}`;
 }
 
 export function formatMoney(n: number | undefined, currency = 'EUR'): string {
