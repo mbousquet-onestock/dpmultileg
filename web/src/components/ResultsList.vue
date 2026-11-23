@@ -98,12 +98,12 @@ function legsCount(o: PromiseOption): number {
 <style scoped>
 .stats { margin: 0 0 4px; }
 .results { display: flex; flex-direction: column; gap: 8px; }
-.card { border: 1px solid var(--os-border); border-radius: 5px; background: #fff; transition: border-color 0.15s; overflow: hidden; }
+.card { border: 1px solid var(--os-border); border-radius: 5px; background: #fff; transition: border-color 0.15s; }
 .card.selected { border-color: var(--os-primary-1000); box-shadow: inset 3px 0 0 var(--os-primary-1000); }
 .card.none .name { color: var(--os-text-secondary); }
 .result {
   display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 0; background: transparent; width: 100%;
-  cursor: pointer; text-align: left; font-family: Roboto, sans-serif; color: var(--os-text-primary); transition: background 0.15s;
+  cursor: pointer; text-align: left; font-family: Roboto, sans-serif; color: var(--os-text-primary); transition: background 0.15s; border-radius: 4px;
 }
 .result:hover { background: var(--os-surface-hover); }
 .pick { padding: 0 12px 12px 60px; }
