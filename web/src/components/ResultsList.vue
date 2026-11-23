@@ -1,9 +1,26 @@
 <script setup lang="ts">
-import { OsBadge, OsIcon, OsPicto } from '@onestock-public/design-system';
+import { OsBadge, OsIcon, OsPicto, OsSelect, type OsMenuOptionItem } from '@onestock-public/design-system';
+import type { DeliveryConfig } from '@shared/types';
 import { shipmentsFromPromise, isClickAndCollect } from '@shared/logistics';
 import type { PromiseOption } from '@shared/types';
 import { formatMoney, formatRange, t } from '../i18n';
-import { currency, display, state, zoneCtx } from '../store';
+import { currency, destination, display, pickupStores, pickupStoresFor, refinePickupStore, state, zoneCtx } from '../store';
+
+/** Collection stores offered for a click & collect result (nearest to the address first). */
+function storeOptions(config: DeliveryConfig | undefined): OsMenuOptionItem[] {
+  return pickupStoresFor(config).map((e) => ({
+    id: e.id,
+    primaryText: e.name ?? e.id,
+    secondaryText: [e.address?.zip_code, e.address?.city].filter(Boolean).join(' ') || e.id,
+    icon: 'store',
+  }));
+}
+function storeOf(method: string): string {
+  return pickupStores[method] ?? destination.value?.endpoint_id ?? '';
+}
+function onStore(method: string, id: unknown) {
+  if (typeof id === 'string' && id && id !== storeOf(method)) void refinePickupStore(method, id);
+}
 
 function statusColor(o: PromiseOption) {
   if (o.status.startsWith('valid')) return 'green';
@@ -31,14 +48,13 @@ function legsCount(o: PromiseOption): number {
           .replace('{compute}', String(state.stats.compute_ms))
       }}
     </p>
-    <button
+    <div
       v-for="(entry, idx) in state.results ?? []"
       :key="`${entry.option.delivery_method}-${idx}`"
-      type="button"
-      class="result"
+      class="card"
       :class="{ selected: state.selected === idx, none: entry.option.status === 'none' }"
-      @click="state.selected = idx"
     >
+    <button type="button" class="result" @click="state.selected = idx">
       <OsPicto :icon="isClickAndCollect(entry.config) ? 'store' : 'truck'" size="s" :color="entry.option.status === 'none' ? 'grey' : 'primary'" />
       <div class="main">
         <div class="line1">
@@ -63,19 +79,35 @@ function legsCount(o: PromiseOption): number {
       </div>
       <OsIcon icon="chevron-right" color="secondary" class="chev" />
     </button>
+    <div v-if="isClickAndCollect(entry.config) && storeOptions(entry.config).length" class="pick">
+      <OsSelect
+        :model-value="storeOf(entry.option.delivery_method)"
+        class="pick-select"
+        :label="t('pickupStore')"
+        :placeholder="t('selectStockLocation')"
+        :options="storeOptions(entry.config)"
+        :menu="{ searchable: true }"
+        :disabled="state.running"
+        @update:model-value="onStore(entry.option.delivery_method, $event)"
+      />
+    </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .stats { margin: 0 0 4px; }
 .results { display: flex; flex-direction: column; gap: 8px; }
+.card { border: 1px solid var(--os-border); border-radius: 5px; background: #fff; transition: border-color 0.15s; overflow: hidden; }
+.card.selected { border-color: var(--os-primary-1000); box-shadow: inset 3px 0 0 var(--os-primary-1000); }
+.card.none .name { color: var(--os-text-secondary); }
 .result {
-  display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 1px solid var(--os-border); border-radius: 5px; background: #fff;
-  cursor: pointer; text-align: left; font-family: Roboto, sans-serif; color: var(--os-text-primary); transition: border-color 0.15s, background 0.15s;
+  display: flex; align-items: flex-start; gap: 12px; padding: 12px; border: 0; background: transparent; width: 100%;
+  cursor: pointer; text-align: left; font-family: Roboto, sans-serif; color: var(--os-text-primary); transition: background 0.15s;
 }
 .result:hover { background: var(--os-surface-hover); }
-.result.selected { border-color: var(--os-primary-1000); box-shadow: inset 3px 0 0 var(--os-primary-1000); background: #fff; }
-.result.none .name { color: var(--os-text-secondary); }
+.pick { padding: 0 12px 12px 60px; }
+.pick-select { max-width: 360px; }
 .main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
 .line1 { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

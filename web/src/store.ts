@@ -1,5 +1,5 @@
 import type { ExecutionTime, Timetable } from '@shared/timetables';
-import { deliveryMethods, type StockLine, type ZoneContext } from '@shared/logistics';
+import { deliveryMethods, isClickAndCollect, zoneEndpoints, type StockLine, type ZoneContext } from '@shared/logistics';
 import { candidateEndpoints, computePromise, stockRequestOf, type CapacityLookup, type CapacityQuery, type LocalPromiseOption } from '@shared/promise';
 import type { DeliveryConfig, Destination, Endpoint, Item } from '@shared/types';
 import { computed, markRaw, reactive, toRaw, watch } from 'vue';
@@ -139,16 +139,78 @@ function refMaps(ref: Referential) {
   return m;
 }
 
-export async function runTest() {
+/**
+ * Click & collect: collection store chosen in the result of a method (method -> endpoint id). The promise of that
+ * method is computed again with this store as destination.
+ */
+export const pickupStores = reactive<Record<string, string>>({});
+
+/** Stores where a click & collect method can deliver: stock locations of its delivery zones. */
+export function pickupStoresFor(config: DeliveryConfig | undefined): Endpoint[] {
+  if (!config) return [];
+  const ctx = zoneCtx.value;
+  const seen = new Map<string, Endpoint>();
+  for (const z of config.delivery_zone_ids ?? []) for (const e of zoneEndpoints(ctx.zones.get(z), ctx)) if (!seen.has(e.id)) seen.set(e.id, ctx.endpoints.get(e.id) ?? e);
+  const loc = state.destType === 'address' && state.address.country ? state.address : undefined;
+  const byName = (a: Endpoint, b: Endpoint) => (a.name ?? a.id).localeCompare(b.name ?? b.id);
+  if (!loc) return [...seen.values()].sort(byName);
+  // nearest first: same country, then the longest common zip code prefix, then the closest zip code
+  const score = (e: Endpoint) => {
+    const country = e.address?.regions?.country?.code?.toUpperCase();
+    const zip = (e.address?.zip_code ?? '').replace(/\s/g, '');
+    const target = loc.zip_code.replace(/\s/g, '');
+    let prefix = 0;
+    while (prefix < zip.length && prefix < target.length && zip[prefix] === target[prefix]) prefix++;
+    const gap = /^\d+$/.test(zip) && /^\d+$/.test(target) ? Math.abs(Number(zip) - Number(target)) : Number.MAX_SAFE_INTEGER;
+    return [country && country !== loc.country.toUpperCase() ? 1 : 0, -prefix, gap];
+  };
+  const scores = new Map([...seen.values()].map((e) => [e.id, score(e)]));
+  return [...seen.values()].sort((a, b) => {
+    const x = scores.get(a.id)!;
+    const y = scores.get(b.id)!;
+    return x[0] - y[0] || x[1] - y[1] || x[2] - y[2] || byName(a, b);
+  });
+}
+
+/** Click & collect configuration of a method in the selected sales channel. */
+function clickCollectConfig(method: string): DeliveryConfig | undefined {
+  const c = (state.referential?.delivery_configs ?? []).find(
+    (x) => x.delivery_method === method && (!x.sales_channel_id || x.sales_channel_id === state.salesChannel),
+  );
+  return c && isClickAndCollect(c) ? c : undefined;
+}
+
+/** Compute again one click & collect method for the chosen store (empty = the destination of the form). */
+export async function refinePickupStore(method: string, endpointId: string) {
+  if (endpointId) pickupStores[method] = endpointId;
+  else delete pickupStores[method];
+  if (!destination.value) return;
+  await runTest({ method, destination: endpointId ? { endpoint_id: endpointId } : destination.value });
+}
+
+export async function runTest(only?: { method: string; destination: Destination }) {
   if (!canRun.value || !destination.value || !state.referential) return;
+  if (!only) for (const k of Object.keys(pickupStores)) delete pickupStores[k];
   state.running = true;
   state.error = null;
-  state.selected = -1;
+  if (!only) state.selected = -1;
   try {
     const ref = state.referential;
-    const dest = destination.value;
-    const methods = state.methods.enabled && state.methods.values.length ? state.methods.values : channelMethods.value.map((c) => c.delivery_method);
+    const dest = only?.destination ?? destination.value;
+    const methods = only ? [only.method] : state.methods.enabled && state.methods.values.length ? state.methods.values : channelMethods.value.map((c) => c.delivery_method);
     const lines = state.lines.map((l) => ({ item_id: l.item.id, qty: l.qty }));
+    // Click & collect towards an address: computed by default for the nearest collection store (changeable in the result).
+    const groups: { methods: string[]; destination: Destination }[] = [];
+    const rest: string[] = [];
+    for (const m of methods) {
+      const cfg = !only && state.destType === 'address' ? clickCollectConfig(m) : undefined;
+      const nearest = cfg ? pickupStoresFor(cfg)[0] : undefined;
+      if (nearest) {
+        pickupStores[m] = nearest.id;
+        groups.push({ methods: [m], destination: { endpoint_id: nearest.id } });
+      } else rest.push(m);
+    }
+    if (rest.length) groups.unshift({ methods: rest, destination: dest });
     const from = state.date.enabled && state.date.value ? Math.floor(new Date(state.date.value).getTime() / 1000) : Math.floor(Date.now() / 1000);
     const common = {
       salesChannel: state.salesChannel,
@@ -179,7 +241,7 @@ export async function runTest() {
 
     // Stock of every stock location that may serve the order: one call per stock request of the delivery methods
     // (delivery_configs.stock_request), all in parallel.
-    const eps = candidateEndpoints(common);
+    const eps = [...new Set(groups.flatMap((g) => [...candidateEndpoints({ ...common, ...g }), ...(g.destination.endpoint_id ? [g.destination.endpoint_id] : [])]))];
     const requests = [
       ...new Set(
         ref.delivery_configs
@@ -233,8 +295,9 @@ export async function runTest() {
     const { timetablesMap, executionTimesMap } = refMaps(ref);
     const compute = () => {
       const c0 = performance.now();
-      const r = computePromise({
+      const run = (g: { methods: string[]; destination: Destination }) => computePromise({
         ...common,
+        ...g,
         lines,
         from,
         items: itemsMap,
@@ -248,6 +311,9 @@ export async function runTest() {
         consolidate: state.consolidation,
         capacity,
       });
+      // results in the order of the methods
+      const all = groups.flatMap(run);
+      const r = methods.flatMap((m) => all.filter((o) => o.delivery_method === m));
       computeMs += performance.now() - c0;
       return r;
     };
@@ -304,12 +370,22 @@ export async function runTest() {
       total_ms: Math.round(performance.now() - t0),
     };
     console.info('[dpmultileg] promise timings', state.stats);
-    state.results = options.map((option) => markRaw({ option, config: option.config }));
-    const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
-    state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;
+    const entries = options.map((option) => markRaw({ option, config: option.config }));
+    if (only && state.results) {
+      // replace the result of this method only, at the same place
+      const idx = state.results.findIndex((r) => r.option.delivery_method === only.method);
+      if (idx >= 0 && entries[0]) {
+        state.results.splice(idx, 1, entries[0]);
+        state.selected = idx;
+      }
+    } else {
+      state.results = entries;
+      const firstOk = state.results.findIndex((r) => r.option.status !== 'none');
+      state.selected = firstOk >= 0 ? firstOk : state.results.length ? 0 : -1;
+    }
   } catch (e) {
     state.error = e;
-    state.results = null;
+    if (!only) state.results = null;
   } finally {
     state.running = false;
   }

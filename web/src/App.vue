@@ -175,7 +175,7 @@ const missing = computed(() => (!state.lines.length ? t('needItems') : !destinat
         <div class="run-bar">
           <OsBadge v-if="channelName" :text="channelName" />
           <span class="os-body-s os-text-secondary">{{ missing }}</span>
-          <OsButton class="run" :text="t('test')" :pending="state.running" :disabled="!canRun" @click="runTest" />
+          <OsButton class="run" :text="t('test')" :pending="state.running" :disabled="!canRun" @click="runTest()" />
         </div>
       </div>
 
