@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { applyStockTypes, collectStockLines, parseStockTypes, sameCarrier, type StockLine, type StockTypes } from '../../shared/logistics.js';
+import { restrictionItemIds } from '../../shared/promise.js';
 import { normalizeTimetable, type ExecutionTime, type ScheduledEvent, type Timetable } from '../../shared/timetables.js';
 import { asList, normalizeRoutes } from '../../shared/normalize.js';
 import type { DeliveryConfig, DeliveryRestriction, DeliveryRoute, Endpoint, Item, SalesChannel, SortOrder, Zone } from '../../shared/types.js';
@@ -701,7 +702,9 @@ async function loadReferential(t: Target, requestId?: string) {
           const feats = Object.entries(r.item_filter?.feature ?? {})
             .map(([k, v]) => `${k} ${(Array.isArray(v) ? v : Object.values(v)).map((c) => `${c.op} ${c.value}`).join(' / ')}`)
             .join(', ');
-          return `${carriers || '—'}${feats ? ` if ${feats}` : ''}`;
+          const ids = restrictionItemIds(r);
+          const items = ids.length ? `items ${ids.slice(0, 5).join(', ')}${ids.length > 5 ? '…' : ''}` : '';
+          return `${carriers || '—'}${feats || items ? ` if ${[feats, items].filter(Boolean).join(' / ')}` : ''}`;
         })
         .join(' · '),
   );

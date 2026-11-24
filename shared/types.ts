@@ -193,5 +193,10 @@ export interface DeliveryRestriction {
     category?: string[];
     /** feature -> conditions, e.g. { weight: [{ op: 'gt', value: 30 }] } */
     feature?: Record<string, { op: string; value?: unknown }[] | Record<string, { op: string; value?: unknown }>>;
+    /** Items excluded by identifier (id / item_id / sku). */
+    sku?: string[] | string;
+    ids?: string[];
+    item_ids?: string[];
+    [key: string]: unknown;
   };
 }

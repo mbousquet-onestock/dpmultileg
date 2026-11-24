@@ -349,3 +349,25 @@ describe('click & collect with part of the items in the store', () => {
     expect(o.eta_end!).toBeGreaterThanOrEqual(o.local_ready!);
   });
 });
+
+describe('restrictions on items (sku / id / item_id)', () => {
+  it('excludes only the listed items', async () => {
+    const { restrictionMatchesItem } = await import('./promise.js');
+    const r = { id: 'r', carrier_blacklist: [{ name: 'GLS', option: 'express' }], item_filter: { sku: ['00004', 'ABC'] } };
+    expect(restrictionMatchesItem(r, { id: '00004' })).toBe(true);
+    expect(restrictionMatchesItem(r, { id: 'X', sku: 'ABC' } as never)).toBe(true);
+    expect(restrictionMatchesItem(r, { id: 'X', attributes: { sku: ['ABC'] } })).toBe(true);
+    expect(restrictionMatchesItem(r, { id: '00002' })).toBe(false);
+    expect(restrictionMatchesItem({ id: 'r2', item_filter: { item_ids: ['00002'] } }, { id: '00002' })).toBe(true);
+    expect(restrictionMatchesItem({ id: 'r3', item_filter: { feature: { sku: [{ op: 'in', value: ['00003'] }] } } }, { id: '00003' })).toBe(true);
+  });
+
+  it('keeps the other items on the restricted route', () => {
+    const base = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
+    const carrier = base.delivery_routes![0].carrier;
+    const cfg = mockConfigs.map((c) => (c.delivery_method === 'HD_standard' ? { ...c, applied_restrictions: ['r_sku'] } : c));
+    const restrictions = [{ id: 'r_sku', carrier_blacklist: [carrier], item_filter: { sku: ['SCARF_WOOL_RD'] } }];
+    const o = run('HD_standard', [['PARKA_WINTER_KK_M', 1]], paris, { configs: cfg, restrictions });
+    expect(o.delivery_routes![0].carrier).toEqual(carrier);
+  });
+});

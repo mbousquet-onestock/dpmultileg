@@ -231,23 +231,56 @@ function compare(op: string, actual: unknown, expected: unknown): boolean {
 }
 
 /** Does a restriction item filter apply to an item? Empty filter = every item. Undefined when not evaluable. */
+/** Keys of a restriction item filter listing items by id / item_id / sku (those items are excluded). */
+const ITEM_ID_KEYS = ['sku', 'skus', 'id', 'ids', 'item_id', 'item_ids', 'items'];
+const ITEM_ID_FEATURES = new Set(['sku', 'id', 'item_id', 'item_ids', 'ids', 'skus']);
+
+/** Items listed by a restriction filter (sku / id / item_id, as values, lists or objects). */
+export function restrictionItemIds(r: DeliveryRestriction): string[] {
+  const f = (r.item_filter ?? {}) as Record<string, unknown>;
+  const flat = (v: unknown): string[] => {
+    if (v === undefined || v === null || v === '') return [];
+    if (Array.isArray(v)) return v.flatMap(flat);
+    if (typeof v === 'object') {
+      const o = v as Record<string, unknown>;
+      return flat(o.id ?? o.item_id ?? o.sku ?? o.value ?? o.values);
+    }
+    return [String(v)];
+  };
+  return [...new Set(ITEM_ID_KEYS.flatMap((k) => flat(f[k])))];
+}
+
+/** Identifiers of an item: id, item_id, sku (field or feature). */
+function itemIdentifiers(item: Item): string[] {
+  const o = item as unknown as Record<string, unknown>;
+  return [o.id, o.item_id, o.sku, ...(attr(item, 'sku') ?? []), ...(attr(item, 'item_id') ?? [])]
+    .filter((x) => x !== undefined && x !== null && x !== '')
+    .map(String);
+}
+
 export function restrictionMatchesItem(r: DeliveryRestriction, item: Item | undefined): boolean | undefined {
   const f = r.item_filter;
   const hasCategory = !!f?.category?.length;
   const features = Object.entries(f?.feature ?? {});
-  if (!hasCategory && !features.length) return true;
+  const ids = restrictionItemIds(r);
+  if (!hasCategory && !features.length && !ids.length) return true;
   if (!item) return undefined;
+  // items listed by id / item_id / sku: excluded from the routes of the restriction
+  if (ids.length && itemIdentifiers(item).some((x) => ids.includes(x))) return true;
   if (hasCategory && (item.category_ids ?? []).some((c) => f!.category!.some((x) => c === x || c.startsWith(`${x}>`)))) return true;
   for (const [name, conds] of features) {
     // item fields (weight, length, width, height) take precedence over features with the same name
     const field = (item as unknown as Record<string, unknown>)[name];
-    const values = typeof field === 'number' ? [field] : attr(item, name);
+    // conditions on the identifiers (sku / id / item_id) are evaluated on every identifier of the item
+    const values = ITEM_ID_FEATURES.has(name.toLowerCase()) ? itemIdentifiers(item) : typeof field === 'number' ? [field] : attr(item, name);
     if (!values) continue;
     // conditions: an array [{ op, value }] (GET /delivery_restrictions/{id}) or an object of conditions
     for (const cond of (Array.isArray(conds) ? conds : Object.values(conds ?? {})) as { op: string; value?: unknown }[]) {
       if (values.some((v) => compare(cond.op, v, cond.value))) return true;
     }
   }
+  // only a list of items: decided on the identifiers
+  if (ids.length && !hasCategory && !features.length) return false;
   if (!item.attributes && !item.category_ids) return undefined;
   return false;
 }
