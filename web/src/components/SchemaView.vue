@@ -3,7 +3,7 @@
  * Logistic schema of the selected delivery option, as computed locally (shared/promise.ts):
  * selected schema(s), then the other possible schemas with the reason they were not selected.
  */
-import { OsAlert, OsBadge, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
+import { OsAlert, OsBadge, OsButton, OsCardLayout, OsCollapse, OsDivider, OsIcon, OsTag } from '@onestock-public/design-system';
 import { criterionKind, formatHours, prioritiesFor, settingsPriorities, type LogisticSchema } from '@shared/logistics';
 import { decisiveBetween, type SchemaAnalysis } from '@shared/promise';
 import type { OperationTiming } from '@shared/timetables';
@@ -59,6 +59,10 @@ interface Row {
   number: number;
   selected: boolean;
   reasons: Reason[];
+  /** No line of the order can use this route (restriction, cost table, stock or timetable for every item). */
+  excluded: boolean;
+  /** Why the route is excluded / not retained (shown on demand). */
+  why: Reason[];
 }
 
 const rows = computed<Row[]>(() => {
@@ -127,9 +131,56 @@ const rows = computed<Row[]>(() => {
         });
       else reasons.push({ ok: null, text: t('whyTieWithSelected') });
     }
-    return { a, number: i + 1, selected, reasons };
+    // origin of the exclusions, item by item (always computed: shown with the button of the route)
+    const why: Reason[] = [];
+    const lines = a.stock.map((x) => ({ item_id: x.item_id, qty: x.qty }));
+    for (const s of a.stock) {
+      for (const e of a.exclusions.filter((x) => x.item_id === s.item_id)) {
+        const item = `${itemLabel(s.item_id)} × ${s.qty}`;
+        const text =
+          e.kind === 'no_stock'
+            ? t('whyNoStock').replace('{item}', item).replace('{zone}', zoneName(a.schema.originZoneId ?? ''))
+            : t(e.kind === 'restriction' ? 'whyRestricted' : e.kind === 'timetable' ? 'whyNoSlot' : 'whyConstraintFailed')
+                .replace('{item}', itemLabel(s.item_id))
+                .replace('{what}', e.text);
+        if (!why.some((w) => w.text === text)) why.push({ ok: false, text });
+      }
+    }
+    const excluded = !selected && lines.length > 0 && lines.every((l) => a.exclusions.some((e) => e.item_id === l.item_id));
+    if (!selected && !excluded) {
+      // eligible but not retained: the decisive priority criterion
+      if (selectedRef) {
+        const d = decisiveBetween(sortOrder.value, selectedRef, a);
+        why.push(
+          d?.chosenBetter
+            ? {
+                ok: false,
+                text: t('whyLostOnCriterion')
+                  .replace('{rank}', String(d.rank))
+                  .replace('{label}', criterionLabel(d.field))
+                  .replace('{chosen}', criterionFormat(d.field, d.chosen))
+                  .replace('{other}', criterionFormat(d.field, d.other)),
+              }
+            : { ok: null, text: t('whyTieWithSelected') },
+        );
+      }
+    }
+    return { a, number: i + 1, selected, reasons, excluded, why };
   });
 });
+
+/** Eligible routes (selected first) then the excluded ones. */
+const rowGroups = computed(() => [
+  { key: 'eligible', rows: sortedRows.value.filter((r) => !r.excluded) },
+  { key: 'excluded', rows: sortedRows.value.filter((r) => r.excluded) },
+]);
+const whyOpen = ref(new Set<number>());
+function toggleWhy(n: number) {
+  const next = new Set(whyOpen.value);
+  if (next.has(n)) next.delete(n);
+  else next.add(n);
+  whyOpen.value = next;
+}
 
 /** Operations whose execution time could not be read (counted as 0). */
 const unknownOperations = computed(() => {
@@ -338,7 +389,15 @@ function chainLegs(a: SchemaAnalysis) {
         </div>
         <p v-if="!rows.length" class="os-label-s os-text-secondary">{{ t('noSchema') }}</p>
 
-        <div v-for="row in sortedRows" :key="row.number" class="theo" :class="{ used: row.selected }">
+        <template v-for="g in rowGroups" :key="g.key">
+        <div v-if="g.key === 'excluded' && g.rows.length" class="group-head">
+          <span class="os-label-l">{{ t('routesExcluded') }} ({{ g.rows.length }})</span>
+          <span class="os-body-s os-text-secondary">{{ t('routesExcludedHint') }}</span>
+        </div>
+        <div v-else-if="g.key === 'eligible' && g.rows.length" class="group-head">
+          <span class="os-label-l">{{ t('routesEligible') }} ({{ g.rows.length }})</span>
+        </div>
+        <div v-for="row in g.rows" :key="row.number" class="theo" :class="{ used: row.selected, excluded: row.excluded }">
           <div class="theo-head os-body-s os-text-secondary">
             <span>
               #{{ row.number }} · {{ row.a.schema.legs.length }} {{ row.a.schema.legs.length > 1 ? t('legs') : t('leg') }} · {{ t('transit') }}
@@ -353,8 +412,22 @@ function chainLegs(a: SchemaAnalysis) {
                 type="secondary"
               />
               <OsBadge v-if="row.selected" :text="t('schemaSelected')" color="green" icon="check" />
+              <OsBadge v-else-if="row.excluded" :text="t('routeNotEligible')" color="red" type="secondary" />
+              <OsButton
+                v-if="!row.selected && row.why.length"
+                type="tertiary"
+                :icon="whyOpen.has(row.number) ? 'chevron-up' : 'info-outline'"
+                :text="row.excluded ? t('whyExcludedBtn') : t('whyNotRetainedBtn')"
+                @click="toggleWhy(row.number)"
+              />
             </span>
           </div>
+          <ul v-if="whyOpen.has(row.number)" class="reasons why">
+            <li v-for="(r, k) in row.why" :key="k" class="os-body-s" :class="r.ok === true ? 'ok' : r.ok === false ? 'ko' : 'info'">
+              <OsIcon :icon="r.ok === false ? 'close-circle-outline' : 'info-outline'" size="xs" />
+              <span>{{ r.text }}</span>
+            </li>
+          </ul>
           <!-- Consolidated route: transfers to the consolidation point, then delivery of every item from it -->
           <template v-if="isConsolidated(row.a) && option.consolidation">
             <div v-for="(tr, k) in option.consolidation.transfers" :key="'tr' + k" class="segment">
@@ -412,6 +485,7 @@ function chainLegs(a: SchemaAnalysis) {
             </li>
           </ul>
         </div>
+        </template>
       </section>
 
       <OsCollapse v-if="display.config && data.entry.config" v-model="configOpen">
@@ -423,6 +497,9 @@ function chainLegs(a: SchemaAnalysis) {
 </template>
 
 <style scoped>
+.group-head { display: flex; flex-direction: column; gap: 2px; margin-top: 8px; }
+.theo.excluded { opacity: 0.85; border-color: var(--os-red-200, #f3c2c2); }
+.reasons.why { margin: 0; }
 .schema { display: flex; flex-direction: column; gap: 16px; }
 header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; }
 .title { display: flex; flex-direction: column; gap: 2px; }
