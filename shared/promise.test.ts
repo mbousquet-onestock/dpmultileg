@@ -362,6 +362,18 @@ describe('restrictions on items (sku / id / item_id)', () => {
     expect(restrictionMatchesItem({ id: 'r3', item_filter: { feature: { sku: [{ op: 'in', value: ['00003'] }] } } }, { id: '00003' })).toBe(true);
   });
 
+  it('reads the OneStock format: feature sku eq', async () => {
+    const { restrictionMatchesItem } = await import('./promise.js');
+    const r = {
+      id: '6b059294cd35387144850197',
+      item_filter: { feature: { sku: [{ op: 'eq', value: '0136-5401099' }] } },
+      carrier_blacklist: [{ name: 'GLS', option: 'standard' }],
+    };
+    expect(restrictionMatchesItem(r, { id: '0136-5401099' })).toBe(true);
+    expect(restrictionMatchesItem(r, { id: '00002', attributes: { sku: ['0136-5401099'] } })).toBe(true);
+    expect(restrictionMatchesItem(r, { id: '00002', attributes: {} })).toBe(false);
+  });
+
   it('keeps the other items on the restricted route', () => {
     const base = run('HD_standard', [['PARKA_WINTER_KK_M', 1]]);
     const carrier = base.delivery_routes![0].carrier;
